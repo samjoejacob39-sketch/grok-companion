@@ -494,7 +494,8 @@ export async function renderSettings(host) {
 
   const seedCard = card("Configuration summary", "what's live right now",
     el("div", { class: "grid tiles" },
-      tile("AI brain", cfg.xai.localMode ? "local · free" : cfg.xai.keyConfigured ? "Grok key set" : "missing", cfg.xai.localMode ? cfg.xai.model : cfg.xai.keyConfigured ? `ends ${cfg.xai.keyLast4}` : "add in AI page", cfg.xai.localMode || cfg.xai.keyConfigured ? "ok" : "bad"),
+      tile("AI brain", cfg.xai.keyConfigured ? "key set" : cfg.xai.provider === "local" ? "local · free" : "needs free key",
+        `${cfg.xai.provider || "openrouter"} · ${cfg.xai.model || "—"}`, cfg.xai.keyConfigured || cfg.xai.provider === "local" ? "ok" : "warn"),
       tile("Discord token", cfg.discord.tokenConfigured ? "configured" : "missing", cfg.discord.tokenConfigured ? `ends ${cfg.discord.tokenLast4}` : "add in Discord page", cfg.discord.tokenConfigured ? "ok" : "bad"),
       tile("Model", cfg.xai.model, cfg.personality.lowercase ? "lowercase · style-guided" : "mixed case style", "accent"),
       tile("Channels", String((cfg.channels || []).length), "under active engine", "accent"),

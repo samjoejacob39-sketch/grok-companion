@@ -49,16 +49,28 @@ function cleanChannelConfig(c) {
   };
 }
 
+/** classify the configured LLM endpoint so the UI can label it */
+function xaiProvider(cfg) {
+  const b = String(cfg.xai.baseUrl || "");
+  if (/generativelanguage\.googleapis\.com/i.test(b)) return "gemini";
+  if (/openrouter\.ai/i.test(b)) return "openrouter";
+  if (/api\.x\.ai/i.test(b)) return "grok";
+  if (/127\.0\.0\.1|localhost/i.test(b)) return "local";
+  return "custom";
+}
+
 /** config the dashboard is allowed to see (no secrets) */
 function publicConfig() {
   const cfg = getConfig();
+  const provider = xaiProvider(cfg);
   return {
     xai: {
       keyConfigured: hasSecret("xai"),
       keyLast4: cfg.xai.apiKeyLast4 || "",
       model: cfg.xai.model,
-      baseUrl: cfg.xai.baseUrl || "https://api.x.ai/v1",
-      localMode: !/api\.x\.ai/i.test(cfg.xai.baseUrl || "https://api.x.ai/v1"),
+      baseUrl: cfg.xai.baseUrl || "https://openrouter.ai/api/v1",
+      provider,
+      keyless: provider === "local", // only truly-local servers run without a key
       temperature: cfg.xai.temperature,
       topP: cfg.xai.topP,
       maxOutputTokens: cfg.xai.maxOutputTokens,
@@ -146,13 +158,15 @@ router.get("/xai/status", (req, res) => emit(res, publicConfig().xai));
 
 router.put("/xai/key", h((req, res) => {
   const key = String(req.body?.key || "").trim();
-  if (!/^xai-[A-Za-z0-9_-]{16,}$/.test(key)) {
-    return res.status(400).json({ error: "that doesn't look like an xAI key (expected format: xai-…)" });
+  const xaiStyle = /^xai-[A-Za-z0-9_-]{16,}$/.test(key);
+  const otherStyle = key.length >= 20 && /^[A-Za-z0-9._-]+$/.test(key);   // sk-or-v1-… (OpenRouter), AIza… (Gemini), etc.
+  if (!xaiStyle && !otherStyle) {
+    return res.status(400).json({ error: "that doesn't look like a valid API key (xai-… for Grok, sk-or-v1-… for OpenRouter, AIza… for Gemini)" });
   }
   setSecret("xai", key);
   updateConfig({ xai: {} }, { persist: true });
   markSecretSet("xai");
-  audit("xai.key_set", `xAI API key stored (ends ${key.slice(-4)})`);
+  audit("xai.key_set", `LLM API key stored (ends ${key.slice(-4)})`);
   emit(res, { configured: true, last4: key.slice(-4) });
 }));
 

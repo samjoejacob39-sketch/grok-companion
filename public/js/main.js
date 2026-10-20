@@ -7,7 +7,7 @@ import { renderPersonality, renderContext, renderChannels, renderApprovals, rend
 
 const VIEWS = {
   overview:     { title: "Overview",        sub: "",               render: renderOverview },
-  ai:           { title: "Grok engine",     sub: "xAI API · model · limits",  render: renderAI },
+  ai:           { title: "AI engine",       sub: "free hosted models · API key · limits",  render: renderAI },
   discord:      { title: "Discord link",    sub: "bot account · guilds · safety", render: renderDiscord },
   personality:  { title: "Personality",     sub: "your voice, learned",       render: renderPersonality },
   context:      { title: "Context",         sub: "memory · FAQ · transcripts", render: renderContext },

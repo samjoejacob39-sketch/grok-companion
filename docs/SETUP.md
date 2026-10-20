@@ -7,11 +7,11 @@ This walks through every account, key and click. Budget ~15 minutes.
 ## 0. What you need
 
 - A server (VPS) or your own PC running Node.js **20+** (Node 24 recommended)
-- **One of** (pick in the dashboard, switch anytime):
-  - **Free** — Ollama + Llama 3.2 3B installed on that same machine (see step 4a)
-  - **Paid** — an xAI API key from <https://console.x.ai> → **API Keys** → *Create key*
+- A **free API key** (no credit card) — easiest: [openrouter.ai](https://openrouter.ai) →
+  sign up → *Keys* → create. Free models include **NVIDIA Nemotron 3.5 Lightning**
+  (fast), MiniMax M3.1 Flash, Gemma 4 — all `$0`.
+  Alt: free [Gemini key](https://aistudio.google.com/apikey).
 - A Discord account and a server where you have *"Manage Server"* (invite) rights
-- If you want Llama on a VPS: **≥2 GB RAM** (4 GB comfortable), CPU-only is fine
 
 ---
 
@@ -63,56 +63,36 @@ Open `http://<host>:3000`.
 - Sessions are HttpOnly cookies; *Settings → Log out ALL sessions* revokes
   everything at once. Password changes automatically revoke all sessions.
 
-## 4. Connect the AI brain — free local Llama, or paid Grok
+## 4. Connect the AI brain — free hosted models
 
-### 4a. FREE: run Llama 3.2 3B on your own machine (no API key, no monthly bill)
+Grab ONE free key, paste it, done. The VPS never hosts a model — inference
+happens in the cloud on the provider's free tier.
 
-1. Install [Ollama](https://ollama.com) **on the same machine the companion runs
-   on** (your PC or the VPS — not your other PC):
-   ```bash
-   # Linux (VPS / native install)
-   curl -fsSL https://ollama.com/install.sh | sh
+### 4a. Recommended: OpenRouter (free models incl. NVIDIA Nemotron 3.5)
 
-   # then pull the model (~2 GB download, runs on CPU)
-   ollama pull llama3.2:3b
+1. Sign up free at <https://openrouter.ai> → **Keys** → *Create key* (`sk-or-v1-…`).
+2. Dashboard → **AI engine** → **🟢 OpenRouter** is preselected with
+   `nvidia/nemotron-3.5-lightning:free` (nemotron 3.5, the fast "flash" one — free).
+3. Paste the key → **Save key** → **⚡ Test model** → you're live, $0.
 
-   # sanity check — should print a reply in ~5–20 s on CPU:
-   ollama run llama3.2:3b "say hi"
-   ```
-   Windows: download the Ollama installer from ollama.com, then run the same
-   `ollama pull llama3.2:3b` in PowerShell.
-2. Dashboard → **AI engine** → pick **⟡ Local Llama — FREE**. Leave defaults
-   (`http://127.0.0.1:11434/v1` + `llama3.2:3b`).
-3. **⚡ Test local model** — the first call is slow (model cold-loads into RAM);
-   Ollama keeps it warm for ~5 minutes afterwards.
-4. Handy tips:
-   - Sized for small servers: **4 GB RAM VPS is comfortable, 2 GB minimum**
-     (or use the lighter `llama3.2:1b`).
-   - If replies feel slow, raise *Request timeout* to 120–150 s and/or use the
-     `3b-instruct-q4_K_M` or `1b` tag.
-   - Privacy bonus: prompts/replies never leave the machine, so there's no bill,
-     no key, and no third party reading your Discord context.
+Other free models in the dropdown: `nvidia/nemotron-3.5-super-vl`,
+`nvidia/nemotron-3-super-120b-a12b`, `minimax/minimax-m3.1-flash`, `google/gemma-4-*`.
 
-### 4b. PAID: the official Grok API (higher quality, billed per token)
+Heads-up: free-tier endpoints have per-day fair-use caps. The engine's rate
+controls (requests/minsse, daily cap) plus the reply cooldowns keep you inside
+them naturally. If you ever outgrow free, paid OpenRouter routes cost pennies.
 
-Dashboard → **AI engine** → pick **☁ Official Grok**:
+### 4b. Alternative: Google Gemini free tier
 
-1. Paste your `xai-…` key → **Save key**. It's stored server-side only; the
-   dashboard shows just `configured · ends ####` forever after.
-2. **⚡ Test connection** — proves the key, shows the model that answered,
-   latency and a sample reply.
-3. Pick the **model**. Recommended for constant Discord chat:
-   - `grok-4-fast-reasoning` / `grok-4-fast-non-reasoning` — cheap
-     (~$0.20 in / $0.50 out per 1M tokens), great quality for banter. **Default.**
-   - `grok-3-mini` — cheaper still, decent for light chat.
-   - `grok-3`, `grok-2` — heavyweight, watch your caps.
-4. Tune **temperature** (0.2–0.6 keeps it predictable), **max reply length
-   (tokens)** (~120–200 is plenty for chat messages).
-5. Set **spending & rate controls**:
-   - *Requests/minute* — rate ceiling for the API client
-   - *Daily spend cap ($)*, *Daily request cap* — the engine stops (gracefully)
-     when these are hit; counters reset at midnight server time.
-6. Check **Usage today** — live counters computed from API-reported tokens.
+Dashboard → **AI engine** → **☁ Google Gemini** → paste a free key from
+<https://aistudio.google.com/apikey> → keep `gemini-2.5-flash` → *⚡ Test model*.
+
+### 4c. Advanced: run the model yourself (not required)
+
+The engine speaks generic OpenAI-compatible `/v1`, so any self-hosted backend
+(Ollama → `http://127.0.0.1:11434/v1`, vLLM, llama.cpp server) also works:
+AI engine → *⚙ custom / advanced* → set the URL + model name → save. Local
+servers need no API key at all.
 
 ## 5. Connect the bot account
 

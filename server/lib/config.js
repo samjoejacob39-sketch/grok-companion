@@ -39,8 +39,8 @@ export const DEFAULTS = {
   xai: {
     apiKeySet: false,
     apiKeyLast4: "",
-    model: "llama3.2:3b",
-    baseUrl: "http://127.0.0.1:11434/v1",
+    model: "nvidia/nemotron-3.5-lightning:free",
+    baseUrl: "https://openrouter.ai/api/v1",
     maxOutputTokens: 250,
     temperature: 0.85,
     topP: 0.95,

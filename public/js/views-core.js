@@ -108,12 +108,12 @@ export async function renderOverview(host) {
     tile("Discord bot", b.status === "ready" ? "online" : b.status, b.user ? `as ${b.user.tag}${b.ping ? ` · ${b.ping}ms` : ""}` : "no token configured", b.status === "ready" ? "ok" : b.status === "error" ? "bad" : "warn"),
     tile("Replies today", String(eng.daily || 0), `${eng.hourly || 0} in the last hour`, eng.daily ? "accent" : ""),
     tile("Approvals waiting", String(dash.approvalsPending || 0), dash.approvalsPending ? "needs your review" : "queue clear", dash.approvalsPending ? "warn" : "ok"),
-    tile("AI engine", dash.config.xai.keyConfigured || dash.config.xai.localMode ? "ready" : "not configured",
-      `${dash.config.xai.localMode ? "local Llama (free)" : "xAI Grok (paid)"} · ${dash.config.xai.model || "—"}`,
-      dash.config.xai.keyConfigured || dash.config.xai.localMode ? "ok" : "bad"),
-    tile("Cost today", dash.config.xai.localMode ? "$0" : `$${(gu.usd || 0).toFixed(3)}`,
-      dash.config.xai.localMode ? "local model — no API bill" : `${gu.requests} calls · cap $${rl.maxDailyCostUsd ?? 5}/day`,
-      dash.config.xai.localMode ? "ok" : (gu.usd || 0) >= (rl.maxDailyCostUsd || 5) ? "bad" : ""),
+    tile("AI engine", dash.config.xai.keyConfigured || dash.config.xai.provider === "local" ? "ready" : "add free key",
+      `${{ openrouter: "OpenRouter · free", gemini: "Gemini · free", grok: "xAI Grok (paid)", local: "local (free)", custom: "custom" }[dash.config.xai.provider] || "custom"} · ${dash.config.xai.model || "—"}`,
+      dash.config.xai.keyConfigured || dash.config.xai.provider === "local" ? "ok" : "warn"),
+    tile("Cost today", dash.config.xai.provider === "grok" ? `$${(gu.usd || 0).toFixed(3)}` : "$0",
+      dash.config.xai.provider === "grok" ? `${gu.requests} calls · cap $${rl.maxDailyCostUsd ?? 5}/day` : `${gu.requests} calls · free tier`,
+      dash.config.xai.provider === "grok" && (gu.usd || 0) >= (rl.maxDailyCostUsd || 5) ? "bad" : "ok"),
     tile("Bot uptime", b.status === "ready" ? fmtDur(b.uptimeSec) : "—", eng.breakerOpen ? "circuit breaker OPEN" : "watchdog healthy", eng.breakerOpen ? "bad" : "ok")
   ));
 
@@ -176,106 +176,98 @@ export async function renderOverview(host) {
 
 export async function renderAI(host) {
   const cfg = await api.get("/xai/status");
-  const isLocal = cfg.localMode === undefined
-    ? !/api\.x\.ai/i.test(cfg.baseUrl || "")
-    : !!cfg.localMode;
+  const provider = cfg.provider || "openrouter";
+  const isGemini = provider === "gemini";
+  const isLocal = provider === "local" || provider === "custom";
 
-  /* ── provider picker: local free Llama vs official paid Grok ────── */
+  const PRESETS = [
+    { id: "openrouter", btn: "🟢 OpenRouter — free key, free models", base: "https://openrouter.ai/api/v1", model: "nvidia/nemotron-3.5-lightning:free", help: "openrouter.ai → sign up free → Keys → create key. Free models include NVIDIA Nemotron 3.5 (the 'flash' one), MiniMax, Gemma." },
+    { id: "gemini", btn: "☁ Google Gemini — free key", base: "https://generativelanguage.googleapis.com/v1beta/openai", model: "gemini-2.5-flash", help: "aistudio.google.com/apikey → create free key (no credit card)." },
+  ];
+
+  /* ── provider picker rows ──────────────────────────────────────── */
   const providerRow = el("div", { class: "mode-row" });
-  providerRow.append(
-    el("div", { class: `mode-btn ${isLocal ? "on" : ""}`, text: "⟡ Local Llama — FREE", on: async () => {
-      if (isLocal) return;
+  for (const p of PRESETS) {
+    providerRow.append(el("div", { class: `mode-btn ${provider === p.id ? "on" : ""}`, text: p.btn, on: async () => {
+      if (provider === p.id) return;
       try {
-        await api.put("/xai/settings", { baseUrl: "http://127.0.0.1:11434/v1", model: "llama3.2:3b", requestTimeoutMs: 120000 });
-        toast("Local Llama 3.2 selected — no API key, no cost", "ok");
+        await api.put("/xai/settings", { baseUrl: p.base, model: p.model });
+        toast(`${p.id === "gemini" ? "Gemini" : "OpenRouter"} selected — now paste its free key below`, "ok", 5000);
         window.refreshView();
       } catch (e) { toast(e.message, "err", 6000); }
-    } }),
-    el("div", { class: `mode-btn ${!isLocal ? "on" : ""}`, text: "☁ Official Grok (paid)", on: async () => {
-      if (!isLocal) return;
-      try {
-        await api.put("/xai/settings", { baseUrl: "https://api.x.ai/v1", model: "grok-4-fast-reasoning", requestTimeoutMs: 25000 });
-        toast("Official Grok selected — paste your xAI key in the key card", "ok");
-        window.refreshView();
-      } catch (e) { toast(e.message, "err", 6000); }
-    } })
-  );
-  const providerCard = card("Model brain", "a free local model, or the official xAI API",
+    } }));
+  }
+  providerRow.append(el("div", { class: `mode-btn ${isLocal ? "on" : ""}`, text: "⚙ custom / advanced", title: "host one yourself (Ollama, vLLM…) or point at any OpenAI-compatible API", on: async () => {
+    toast("edit the server URL + model fields below", "ok");
+  } }));
+
+  const providerCard = card("Model brain", "free hosted models — a one-time free API key, then $0",
     providerRow,
-    el("div", { class: "tiny muted", style: "margin-top:8px", text: isLocal
-      ? "Local mode: Ollama (or any OpenAI-compatible server) runs Llama 3.2 3B on this machine. No internet cost, no API key. Needs ~2–3 GB RAM."
-      : "Official mode: replies come from api.x.ai — highest quality, billed per token (a few cents a day)." })
+    el("div", { class: "tiny muted", style: "margin-top:8px", text:
+      provider === "openrouter" ? "OpenRouter: ONE free key unlocks dozens of $0 models (Nemotron 3.5, MiniMax, Gemma…). No credit card."
+      : isGemini ? "Google's free tier: fast Flash models, generous daily quota, no credit card."
+      : "custom endpoint — edited below" })
   );
 
-  /* ── engine-specific card ───────────────────────────────────────── */
-  let engineCard;
+  /* ── engine card (base URL + model + key + test) ────────────────── */
+  const preset = PRESETS.find((p) => p.id === provider);
+  const baseInput = el("input", { type: "text", value: cfg.baseUrl || PRESETS[0].base, style: "font-family:var(--mono)" });
+  const modelInput = el("input", { type: "text", value: cfg.model || PRESETS[0].model, style: "font-family:var(--mono)" });
+  const providerHelp = preset?.help || "any OpenAI-compatible /v1 endpoint works here (Ollama, vLLM, llama.cpp, Groq, Together…)";
+  const testBtn = el("button", { class: "btn sm", text: "⚡ Test model", on: async () => {
+    testBtn.disabled = true; testBtn.textContent = "thinking…";
+    try {
+      const r = await api.post("/xai/test");
+      toast(`Connected — ${r.model} · ${r.usageMs}ms · said "${(r.sample || "").slice(0, 60)}"`, "ok", 8000);
+    } catch (e) { toast(`Test failed: ${e.message}`, "err", 9000); }
+    testBtn.disabled = false; testBtn.textContent = "⚡ Test model";
+  } });
 
-  if (isLocal) {
-    const baseInput = el("input", { type: "text", value: cfg.baseUrl || "http://127.0.0.1:11434/v1", style: "font-family:var(--mono)" });
-    const modelInput = el("input", { type: "text", value: cfg.model || "llama3.2:3b", style: "font-family:var(--mono)" });
-    const testBtnLocal = el("button", { class: "btn sm", text: "⚡ Test local model", on: async () => {
-      testBtnLocal.disabled = true; testBtnLocal.textContent = "loading the model… (first run is slow)";
-      try {
-        const r = await api.post("/xai/test");
-        toast(`Local model OK — ${r.model} · ${((r.usageMs || 0) / 1000).toFixed(1)}s · said "${(r.sample || "").slice(0, 60)}"`, "ok", 8000);
-      } catch (e) { toast(`Test failed: ${e.message}`, "err", 9000); }
-      testBtnLocal.disabled = false; testBtnLocal.textContent = "⚡ Test local model";
-    } });
-    engineCard = card("Local engine", "any OpenAI-compatible endpoint on this machine (default: Ollama)",
-      el("div", { class: "note tiny", style: "margin-bottom:10px" },
-        `Install on this machine:  curl -fsSL https://ollama.com/install.sh | sh   then   ollama pull llama3.2:3b`),
-      el("label", { class: "field", style: "max-width:560px" }, el("span", { text: "Model server URL" }), baseInput),
-      el("label", { class: "field", style: "max-width:560px" }, el("span", { text: "Model name (Ollama tag or llama.cpp model)" }), modelInput),
+  const stack = el("div", { class: "stack", style: "max-width:560px" },
+    el("div", { class: "note tiny", text: providerHelp }),
+    el("label", { class: "field" }, el("span", { text: "Server URL (OpenAI-compatible /v1)" }), baseInput),
+    el("label", { class: "field" }, el("span", { text: "Model name" }), modelInput),
+  );
+
+  if (!isLocal) {
+    const keyInput = el("input", { type: "password", placeholder: isGemini ? "AIza… (free from aistudio.google.com/apikey)" : "sk-or-v1-… (free from openrouter.ai/keys)", autocomplete: "off", style: "font-family:var(--mono)" });
+    stack.append(
+      el("label", { class: "field" },
+        el("span", { text: cfg.keyConfigured ? `API key configured (ends ${cfg.keyLast4}) — paste a new one to replace` : `Paste your free API key (${isGemini ? "Gemini" : "OpenRouter"})` }),
+        keyInput
+      ),
       el("div", { class: "row" },
-        el("button", { class: "btn primary sm", text: "Save local engine", on: async () => {
-          const u = baseInput.value.trim();
-          if (!/^https?:\/\/\S+$/.test(u)) return toast("URL must start with http:// or https://", "warn");
+        el("button", { class: "btn primary sm", text: cfg.keyConfigured ? "Replace key" : "Save key", on: async () => {
+          const v = keyInput.value.trim();
+          if (!v) return toast("enter the key first", "warn");
           try {
-            await api.put("/xai/settings", { baseUrl: u, model: modelInput.value.trim() || "llama3.2:3b" });
-            toast("Local engine saved", "ok");
+            await api.put("/xai/key", { key: v });
+            keyInput.value = "";
+            toast("Key saved server-side", "ok");
             window.refreshView();
           } catch (e) { toast(e.message, "err", 6000); }
         } }),
-        testBtnLocal
+        cfg.keyConfigured ? el("button", { class: "btn ghost sm danger", text: "Remove key", on: async () => {
+          if (!confirm("Remove the API key? Auto replies pause until you add another.")) return;
+          await api.del("/xai/key");
+          toast("Key removed", "warn");
+          window.refreshView();
+        } }) : null,
+        testBtn
       )
     );
   } else {
-    const keyInput = el("input", { type: "password", placeholder: "xai-xxxxxxxxxxxxxxxx", autocomplete: "off", style: "font-family:var(--mono)" });
-    engineCard = card("xAI API key", "kept only on this server, never exposed to the browser",
-      el("div", { class: "stack", style: "max-width:560px" },
-        el("label", { class: "field" },
-          el("span", { text: cfg.keyConfigured ? `Key configured (ends ${cfg.keyLast4}) — paste a new one to replace` : "Paste your xAI API key" }),
-          keyInput
-        ),
-        el("div", { class: "row" },
-          el("button", { class: "btn primary sm", text: cfg.keyConfigured ? "Replace key" : "Save key", on: async () => {
-            const v = keyInput.value.trim();
-            if (!v) return toast("enter a key first", "warn");
-            try {
-              await api.put("/xai/key", { key: v });
-              keyInput.value = "";
-              toast("API key saved server-side", "ok");
-              window.refreshView();
-            } catch (e) { toast(e.message, "err", 6000); }
-          } }),
-          cfg.keyConfigured ? el("button", { class: "btn danger sm", text: "Remove", on: async () => {
-            if (!confirm("Remove the xAI key? Auto replies stop until a new one is added.")) return;
-            await api.del("/xai/key");
-            toast("Key removed", "warn");
-            window.refreshView();
-          } }) : null,
-          el("button", { class: "btn sm", text: "⚡ Test connection", on: async () => {
-            try {
-              const r = await api.post("/xai/test");
-              toast(`Connected — ${r.model} · ${r.usageMs}ms · said "${(r.sample || "").slice(0, 60)}"`, "ok", 7000);
-            } catch (e) { toast(`Test failed: ${e.message}`, "err", 8000); }
-          } })
-        )
-      )
-    );
+    stack.append(el("div", { class: "row" }, el("button", { class: "btn primary sm", text: "Save engine", on: async () => {
+      const u = baseInput.value.trim();
+      if (!/^https?:\/\/\S+$/.test(u)) return toast("URL must start with http:// or https://", "warn");
+      await api.put("/xai/settings", { baseUrl: u, model: modelInput.value.trim() || PRESETS[0].model });
+      toast("Engine saved", "ok");
+      window.refreshView();
+    } }), testBtn));
   }
+  const engineCard = card(isLocal ? "Custom engine" : `${isGemini ? "Gemini" : "OpenRouter"} engine`, "key stays on this server, never in the browser", stack);
 
-  /* model + tuning card */
+  /* ── model + tuning card ───────────────────────────────────────── */
   const modelSelect = el("select");
   const priceLine = el("div", { class: "tiny muted", text: " " });
   const fillModels = async () => {
@@ -288,17 +280,16 @@ export async function renderAI(host) {
         modelSelect.append(el("option", { value: m.id, text: `${m.label || m.id}${p}`, selected: m.id === cfg.model }));
       }
       if (cfg.model && ![...modelSelect.options].some((o) => o.value === cfg.model)) {
-        modelSelect.append(el("option", { value: cfg.model, text: `${cfg.model} (saved)${isLocal ? " · local" : ""}`, selected: true }));
+        modelSelect.append(el("option", { value: cfg.model, text: `${cfg.model} (saved)`, selected: true }));
       }
       updatePrice();
-    } catch { modelSelect.append(el("option", { value: cfg.model || "llama3.2:3b", text: cfg.model || "llama3.2:3b" })); }
+    } catch { modelSelect.append(el("option", { value: cfg.model || "nvidia/nemotron-3.5-lightning:free", text: cfg.model || "nvidia/nemotron-3.5-lightning:free" })); }
   };
   const updatePrice = () => {
     const v = modelSelect.value;
-    priceLine.textContent = !v.startsWith("grok") ? "runs free on your own machine — $0 forever"
-      : v.startsWith("grok-4-fast") ? "grok-4-fast: ~$0.20 in / $0.50 out per 1M tokens — cheap enough for constant chat"
-      : v.includes("mini") ? "mini tier: very cheap, good for banter"
-      : v.includes("grok-3") || v.includes("grok-2") ? "full-size models cost ~$3/$15 per M — watch the daily cap"
+    priceLine.textContent = v.includes(":free") || v.startsWith("gemini") ? "free tier — $0.00 forever (subject to daily fair-use caps)"
+      : v.startsWith("grok-4-fast") ? "~$0.20 in / $0.50 out per 1M tokens"
+      : v.startsWith("grok") ? "paid model — watch the daily cap"
       : "";
   };
   modelSelect.addEventListener("change", updatePrice);
@@ -306,9 +297,9 @@ export async function renderAI(host) {
 
   const temp = slider("Temperature (creativity)", 0.1, 1, 0.05, cfg.temperature);
   const toks = slider("Max reply length (tokens)", 40, 700, 10, cfg.maxOutputTokens);
-  const timeout = slider("Request timeout (s) — local models can be slow", 4, 150, 1, Math.round((cfg.requestTimeoutMs || 25000) / 1000));
+  const timeout = slider("Request timeout (s)", 4, 150, 1, Math.round((cfg.requestTimeoutMs || 25000) / 1000));
 
-  const modelCard = card("Model & sampling", isLocal ? "which local model replies and how it sounds" : "which Grok model replies and how it sounds",
+  const modelCard = card("Model & sampling", "which model replies and how it sounds",
     modelSelect, priceLine, temp.el, toks.el, timeout.el,
     el("button", { class: "btn sm", text: "Save tuning", on: async () => {
       await api.put("/xai/settings", {
@@ -321,26 +312,24 @@ export async function renderAI(host) {
     } })
   );
 
-  /* limits card (cost caps only matter for paid mode) */
+  /* rate card */
   const rl = cfg.rateLimit || {};
   const rpm = numberField("Requests / minute", rl.requestsPerMinute ?? 20);
-  const usd = numberField("Daily spend cap ($)", rl.maxDailyCostUsd ?? 5, 0.5);
   const dreq = numberField("Daily request cap", rl.maxDailyRequests ?? 600);
-  const limitsCard = card(isLocal ? "Rate controls (free — cost caps are moot)" : "Spending & rate controls",
-    isLocal ? "the model never charges, but rate caps still protect your CPU from spam floods" : "hard ceilings — the API refuses calls beyond them, auto-replies pause gracefully",
-    rpm.el, ...(isLocal ? [] : [usd.el]), dreq.el,
+  const limitsCard = card("Rate controls", "protects your free quota from spam floods",
+    rpm.el, dreq.el,
     el("button", { class: "btn sm", text: "Save limits", on: async () => {
-      await api.put("/xai/limits", { requestsPerMinute: rpm.get(), maxDailyCostUsd: usd.get(), maxDailyRequests: dreq.get() });
+      await api.put("/xai/limits", { requestsPerMinute: rpm.get(), maxDailyRequests: dreq.get() });
       toast("Limits saved", "ok");
     } })
   );
 
   const usage = (await api.get("/xai/usage")).usage;
-  const usageCard = card("Usage today", isLocal ? "your own hardware — no tokens to bill" : "computed from API-reported token usage",
+  const usageCard = card("Usage today", "calls against your free quota",
     el("div", { class: "grid tiles" },
       tile("Calls", String(usage.today.requests), `${usage.callsLastMinute} in last minute`),
-      tile(isLocal ? "Cost" : "Est. spend", isLocal ? "$0.0000" : `$${(usage.today.usd || 0).toFixed(4)}`, isLocal ? "local model, zero budget" : "priced per model"),
-      tile("Budget used", isLocal ? "0%" : `${rl.maxDailyCostUsd ? Math.min(100, Math.round(((usage.today.usd || 0) / rl.maxDailyCostUsd) * 100)) : 0}%`, (usage.today.usd || 0) >= (rl.maxDailyCostUsd || 0) && !isLocal ? "capped — replies paused" : "replies running")
+      tile("Cost", "$0.0000", "free models"),
+      tile("Budget used", "0%", "replies running")
     )
   );
 

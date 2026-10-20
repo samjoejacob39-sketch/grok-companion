@@ -23,10 +23,22 @@ export const LOCAL_MODELS = [
 ];
 export const DEFAULT_LOCAL_BASE_URL = "http://127.0.0.1:11434/v1";
 
+// live-fetched from https://openrouter.ai/api/v1/models (2026-10) — fallback when the API is unreachable
+export const OPENROUTER_FREE = [
+  { id: "nvidia/nemotron-3.5-lightning:free", label: "Nemotron 3.5 Lightning · free", ctx: null },
+  { id: "nvidia/nemotron-3.5-super-vl:free", label: "Nemotron 3.5 Super (VL) · free", ctx: null },
+  { id: "nvidia/nemotron-3-super-120b-a12b:free", label: "Nemotron 3 Super 120B · free", ctx: null },
+  { id: "minimax/minimax-m3.1-flash:free", label: "MiniMax M3.1 Flash · free", ctx: null },
+  { id: "google/gemma-4-31b-it:free", label: "Gemma 4 31B · free", ctx: null },
+  { id: "liquid/lfm-2.5-2.6b:free", label: "Liquid LFM 2.5 · free", ctx: null },
+];
+
 export function isLocalBase(baseUrl) {
   const b = String(baseUrl || "").trim();
   if (!b) return false;
-  return !/api\.x\.ai/i.test(b);
+  if (/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\]|0\.0\.0\.0)/i.test(b)) return true;
+  // docker bridge to a model server on the host machine
+  return /^https?:\/\/(host\.docker\.internal|172\.17\.0\.1)/i.test(b);
 }
 
 // ── spend + rpm tracking ─────────────────────────────────────────
@@ -102,9 +114,12 @@ export function estimateCost(model, usage) {
 async function grokFetch(endpoint, body, timeoutMs) {
   const key = getSecret("xai");
   const cfg = getConfig().xai;
-  const base = cfg.baseUrl || "https://api.x.ai/v1";
-  // official x.ai endpoint demands a key; local servers (Ollama, llama.cpp, vLLM…) ignore auth
+  const base = cfg.baseUrl || "https://openrouter.ai/api/v1";
+  // hosted providers demand a key; local servers (Ollama, llama.cpp, vLLM…) ignore auth
   if (!key && /^https:\/\/(api\.)?x\.ai/i.test(base)) throw new GrokError("No xAI API key configured", 401);
+  if (!key && !isLocalBase(base)) {
+    throw new GrokError("No API key set — get a free one at openrouter.ai/keys (or aistudio.google.com/apikey) and paste it on the AI page", 401);
+  }
 
   const controller = new AbortController();
   // local CPU inference is slow — never time out a healthy local model below 90s
@@ -129,7 +144,8 @@ async function grokFetch(endpoint, body, timeoutMs) {
     try { json = text ? JSON.parse(text) : null; } catch { /* non-json */ }
 
     if (!res.ok) {
-      const msg = json?.error || json?.msg || text.slice(0, 300) || `HTTP ${res.status}`;
+      const rawMsg = json?.error || json?.msg;
+      const msg = (typeof rawMsg === "string" ? rawMsg : rawMsg?.message) || text.slice(0, 300) || `HTTP ${res.status}`;
       throw new GrokError(`LLM API ${res.status}: ${msg}`, res.status, json);
     }
     return json;
@@ -144,9 +160,10 @@ async function grokFetch(endpoint, body, timeoutMs) {
 
 export async function listModels() {
   const key = getSecret("xai");
-  const base = getConfig().xai.baseUrl || "https://api.x.ai/v1";
+  const base = getConfig().xai.baseUrl || "https://openrouter.ai/api/v1";
   const local = isLocalBase(base);
-  if (!key && !local) return { ok: false, models: GROK_MODELS, error: "no key" };
+  const openrouter = /openrouter\.ai/i.test(base);
+  if (!key && !local && !openrouter) return { ok: false, models: GROK_MODELS, error: "no key" };
   try {
     checkRateLimits();
     const headers = {};
@@ -158,8 +175,12 @@ export async function listModels() {
       id: m.id,
       label: local ? `${m.id} (local)` : m.id,
       ctx: m.context_length || null,
-      pricing: local ? { in: 0, out: 0 } : null,
+      pricing: local || openrouter ? { in: 0, out: 0 } : null,
     }));
+    if (openrouter) {
+      const free = models.filter((m) => m.id.endsWith(":free"));
+      if (free.length) models = free.map((m) => ({ ...m, label: `${m.id.replace(":free", "")} · free` }));
+    }
     if (local) {
       // if the server hasn't pulled llama3.2 yet, still offer it as a choice
       if (!models.some((m) => m.id.startsWith("llama3.2"))) {
@@ -170,7 +191,8 @@ export async function listModels() {
     return { ok: true, models, error: null };
   } catch (err) {
     log.warn("[grok] /models fetch failed — using built-in list:", err.message);
-    return { ok: false, models: local ? LOCAL_MODELS : GROK_MODELS, error: err.message };
+    const fallback = openrouter ? OPENROUTER_FREE : local ? LOCAL_MODELS : GROK_MODELS;
+    return { ok: false, models: fallback, error: err.message };
   }
 }
 

@@ -73,11 +73,10 @@ npm run dev
 Then open `http://localhost:3000`:
 
 1. **Log in** (first login sets your owner password if `ADMIN_PASSWORD` wasn't seeded).
-2. **AI engine** → pick your brain:
-   - **⟡ Local Llama — FREE** (default-ready): install [Ollama](https://ollama.com) next to
-     the server, `ollama pull llama3.2:3b`, accept the defaults → *Test local model*.
-     No key, no cost, ~2 GB RAM.
-   - **☁ Official Grok**: paste your xAI API key (`xai-…`) → *Test connection* → pick a model.
+2. **AI engine** → the free brain is preselected: create a free key at
+   [openrouter.ai](https://openrouter.ai) → *Keys* → paste it → **Save key** →
+   **⚡ Test model**. Default model: `nvidia/nemotron-3.5-lightning:free` — $0.
+   (Want Google instead? One click: **☁ Gemini** → free key from aistudio.google.com/apikey.)
 3. **Discord link** → paste your bot token → *Save & connect* → copy the invite
    link → add the bot to your server.
 4. **Channels** → configure which channels it may reply in and the reply mode.

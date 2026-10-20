@@ -7,51 +7,17 @@ deployment styles below — **systemd** (bare metal / classic VPS) and
 
 ---
 
-## ⚡ Free local model on the VPS (Llama 3.2 3B via Ollama)
+## ⚡ The model is a free hosted call — the VPS stays tiny
 
-Skip xAI billing entirely by running the model next to the companion.
+You don't host any model. The dashboard's default brain is **OpenRouter**
+(free key → free models like NVIDIA Nemotron 3.5 Lightning). That means:
 
-### systemd (bare metal)
+- the smallest VPS plan you like (1 vCPU / 1 GB is plenty),
+- no API bill — free-tier fair-use caps apply,
+- the only setup is pasting one free key in the dashboard.
 
-```bash
-# 1. install Ollama (systemd service auto-starts, listens on 127.0.0.1:11434)
-curl -fsSL https://ollama.com/install.sh | sh
-
-# 2. pull Llama 3.2 3B (~2 GB, CPU-friendly)
-sudo -H -u ollama ollama pull llama3.2:3b
-
-# 3. verify + warm it up
-ollama run llama3.2:3b "say hi"
-```
-
-Then in the dashboard (**AI engine** → **⟡ Local Llama — FREE**) accept the
-default endpoint `http://127.0.0.1:11434/v1`, model `llama3.2:3b`,
-*Request timeout* ≈ 120 s, and hit **⚡ Test local model**.
-
-Notes:
-
-- **RAM sizing**: Llama 3.2 3B (Q4) ≈ 2.0 GB weights + 0.5–1 GB compute head.
-  A 2 GB VPS is the floor; **4 GB is comfortable**. Too tight? Use
-  `llama3.2:1b` (≈1.3 GB) instead.
-- Ollama unloads the model after ~5 min idle and reloads on demand (~5–15 s
-  first reply). Under constant chat it stays warm.
-- The endpoint is localhost-only by default — nothing to expose or firewall.
-- Optional hardening — pin the keep-alive warm window:
-  `sudo systemctl edit ollama` → add `Environment="OLLAMA_KEEP_ALIVE=30m"`.
-
-### Docker
-
-If the companion runs in Docker and Ollama on the host, point the dashboard at
-`http://host.docker.internal:11434/v1` and add this to `docker-compose.yml`
-under the companion service:
-
-```yaml
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-```
-
-And keep Ollama bound to `0.0.0.0` only if you know why — default
-`127.0.0.1` + `host-gateway` mapping is usually all you need on Docker ≥20.10.
+Self-hosting the model (Ollama on the same box) is optional — see
+*Setup guide → 4c* if you ever want that.
 
 ---
 

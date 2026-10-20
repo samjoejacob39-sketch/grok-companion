@@ -71,3 +71,23 @@ test("local OpenAI-compatible endpoint works with no API key and costs $0", asyn
   assert.equal(estimateCost("llama3.2:3b", { prompt_tokens: 1_000_000, completion_tokens: 1_000_000 }), 0);
   updateConfig({ xai: { apiKey: "xai-test-key-1234567890", baseUrl: "https://api.x.ai/v1" } }, { immediate: true });
 });
+
+test("free hosted model (OpenRouter) works with key and costs $0", async () => {
+  updateConfig({ xai: { apiKey: "sk-or-v1-testkey1234567890abcdefghij", baseUrl: "https://openrouter.ai/api/v1", model: "nvidia/nemotron-3.5-lightning:free" } }, { immediate: true });
+  mockFetch(() => new Response(JSON.stringify({
+    choices: [{ message: { content: "bf fr ngl" } }],
+    usage: { prompt_tokens: 700, completion_tokens: 25 },
+  }), { status: 200, headers: { "Content-Type": "application/json" } }));
+
+  const res = await chatComplete({ messages: [{ role: "user", content: "yo" }] });
+  assert.equal(res.content, "bf fr ngl");
+  assert.equal(lastFetchArgs.opts.headers.Authorization, "Bearer sk-or-v1-testkey1234567890abcdefghij");
+  assert.equal(res.meta.cost, 0);
+  updateConfig({ xai: { apiKey: "xai-test-key-1234567890", baseUrl: "https://api.x.ai/v1", model: "grok-4-fast-reasoning" } }, { immediate: true });
+});
+
+test("hosted provider without any key gives a helpful error", async () => {
+  updateConfig({ xai: { apiKey: "", baseUrl: "https://openrouter.ai/api/v1" } }, { immediate: true });
+  await assert.rejects(() => chatComplete({ messages: [] }), (err) => /free one/.test(err.message));
+  updateConfig({ xai: { apiKey: "xai-test-key-1234567890", baseUrl: "https://api.x.ai/v1" } }, { immediate: true });
+});
