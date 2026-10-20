@@ -108,8 +108,12 @@ export async function renderOverview(host) {
     tile("Discord bot", b.status === "ready" ? "online" : b.status, b.user ? `as ${b.user.tag}${b.ping ? ` · ${b.ping}ms` : ""}` : "no token configured", b.status === "ready" ? "ok" : b.status === "error" ? "bad" : "warn"),
     tile("Replies today", String(eng.daily || 0), `${eng.hourly || 0} in the last hour`, eng.daily ? "accent" : ""),
     tile("Approvals waiting", String(dash.approvalsPending || 0), dash.approvalsPending ? "needs your review" : "queue clear", dash.approvalsPending ? "warn" : "ok"),
-    tile("Spend today", `$${(gu.usd || 0).toFixed(3)}`, `${gu.requests} calls · cap $${rl.maxDailyCostUsd ?? 5}/day`, (gu.usd || 0) >= (rl.maxDailyCostUsd || 5) ? "bad" : ""),
-    tile("Grok engine", dash.config.xai.keyConfigured ? "ready" : "no key", dash.config.xai.model || "—", dash.config.xai.keyConfigured ? "ok" : "bad"),
+    tile("AI engine", dash.config.xai.keyConfigured || dash.config.xai.localMode ? "ready" : "not configured",
+      `${dash.config.xai.localMode ? "local Llama (free)" : "xAI Grok (paid)"} · ${dash.config.xai.model || "—"}`,
+      dash.config.xai.keyConfigured || dash.config.xai.localMode ? "ok" : "bad"),
+    tile("Cost today", dash.config.xai.localMode ? "$0" : `$${(gu.usd || 0).toFixed(3)}`,
+      dash.config.xai.localMode ? "local model — no API bill" : `${gu.requests} calls · cap $${rl.maxDailyCostUsd ?? 5}/day`,
+      dash.config.xai.localMode ? "ok" : (gu.usd || 0) >= (rl.maxDailyCostUsd || 5) ? "bad" : ""),
     tile("Bot uptime", b.status === "ready" ? fmtDur(b.uptimeSec) : "—", eng.breakerOpen ? "circuit breaker OPEN" : "watchdog healthy", eng.breakerOpen ? "bad" : "ok")
   ));
 
@@ -124,11 +128,11 @@ export async function renderOverview(host) {
       window.refreshView();
     },
   });
-  const testBtn = el("button", { class: "btn sm", text: "⚡ Test Grok", on: async () => {
+  const testBtn = el("button", { class: "btn sm", text: "⚡ Test AI", on: async () => {
     testBtn.disabled = true;
     try {
       const r = await api.post("/xai/test");
-      toast(`Grok OK — ${r.model} · ${r.usageMs}ms · "${(r.sample || "").slice(0, 60)}"`, "ok", 6000);
+      toast(`Brain OK — ${r.model} · ${((r.usageMs || 0) / 1000).toFixed(1)}s · "${(r.sample || "").slice(0, 60)}"`, "ok", 6000);
     } catch (e) { toast(`Test failed: ${e.message}`, "err", 7000); }
     testBtn.disabled = false;
   } });
@@ -172,41 +176,104 @@ export async function renderOverview(host) {
 
 export async function renderAI(host) {
   const cfg = await api.get("/xai/status");
+  const isLocal = cfg.localMode === undefined
+    ? !/api\.x\.ai/i.test(cfg.baseUrl || "")
+    : !!cfg.localMode;
 
-  /* key card */
-  const keyInput = el("input", { type: "password", placeholder: "xai-xxxxxxxxxxxxxxxx", autocomplete: "off", style: "font-family:var(--mono)" });
-  const keyCard = card("xAI API key", "kept only on this server, never exposed to the browser",
-    el("div", { class: "stack", style: "max-width:560px" },
-      el("label", { class: "field" },
-        el("span", { text: cfg.keyConfigured ? `Key configured (ends ${cfg.keyLast4}) — paste a new one to replace` : "Paste your xAI API key" }),
-        keyInput
-      ),
+  /* ── provider picker: local free Llama vs official paid Grok ────── */
+  const providerRow = el("div", { class: "mode-row" });
+  providerRow.append(
+    el("div", { class: `mode-btn ${isLocal ? "on" : ""}`, text: "⟡ Local Llama — FREE", on: async () => {
+      if (isLocal) return;
+      try {
+        await api.put("/xai/settings", { baseUrl: "http://127.0.0.1:11434/v1", model: "llama3.2:3b", requestTimeoutMs: 120000 });
+        toast("Local Llama 3.2 selected — no API key, no cost", "ok");
+        window.refreshView();
+      } catch (e) { toast(e.message, "err", 6000); }
+    } }),
+    el("div", { class: `mode-btn ${!isLocal ? "on" : ""}`, text: "☁ Official Grok (paid)", on: async () => {
+      if (!isLocal) return;
+      try {
+        await api.put("/xai/settings", { baseUrl: "https://api.x.ai/v1", model: "grok-4-fast-reasoning", requestTimeoutMs: 25000 });
+        toast("Official Grok selected — paste your xAI key in the key card", "ok");
+        window.refreshView();
+      } catch (e) { toast(e.message, "err", 6000); }
+    } })
+  );
+  const providerCard = card("Model brain", "a free local model, or the official xAI API",
+    providerRow,
+    el("div", { class: "tiny muted", style: "margin-top:8px", text: isLocal
+      ? "Local mode: Ollama (or any OpenAI-compatible server) runs Llama 3.2 3B on this machine. No internet cost, no API key. Needs ~2–3 GB RAM."
+      : "Official mode: replies come from api.x.ai — highest quality, billed per token (a few cents a day)." })
+  );
+
+  /* ── engine-specific card ───────────────────────────────────────── */
+  let engineCard;
+
+  if (isLocal) {
+    const baseInput = el("input", { type: "text", value: cfg.baseUrl || "http://127.0.0.1:11434/v1", style: "font-family:var(--mono)" });
+    const modelInput = el("input", { type: "text", value: cfg.model || "llama3.2:3b", style: "font-family:var(--mono)" });
+    const testBtnLocal = el("button", { class: "btn sm", text: "⚡ Test local model", on: async () => {
+      testBtnLocal.disabled = true; testBtnLocal.textContent = "loading the model… (first run is slow)";
+      try {
+        const r = await api.post("/xai/test");
+        toast(`Local model OK — ${r.model} · ${((r.usageMs || 0) / 1000).toFixed(1)}s · said "${(r.sample || "").slice(0, 60)}"`, "ok", 8000);
+      } catch (e) { toast(`Test failed: ${e.message}`, "err", 9000); }
+      testBtnLocal.disabled = false; testBtnLocal.textContent = "⚡ Test local model";
+    } });
+    engineCard = card("Local engine", "any OpenAI-compatible endpoint on this machine (default: Ollama)",
+      el("div", { class: "note tiny", style: "margin-bottom:10px" },
+        `Install on this machine:  curl -fsSL https://ollama.com/install.sh | sh   then   ollama pull llama3.2:3b`),
+      el("label", { class: "field", style: "max-width:560px" }, el("span", { text: "Model server URL" }), baseInput),
+      el("label", { class: "field", style: "max-width:560px" }, el("span", { text: "Model name (Ollama tag or llama.cpp model)" }), modelInput),
       el("div", { class: "row" },
-        el("button", { class: "btn primary sm", text: cfg.keyConfigured ? "Replace key" : "Save key", on: async () => {
-          const v = keyInput.value.trim();
-          if (!v) return toast("enter a key first", "warn");
+        el("button", { class: "btn primary sm", text: "Save local engine", on: async () => {
+          const u = baseInput.value.trim();
+          if (!/^https?:\/\/\S+$/.test(u)) return toast("URL must start with http:// or https://", "warn");
           try {
-            await api.put("/xai/key", { key: v });
-            keyInput.value = "";
-            toast("API key saved server-side", "ok");
+            await api.put("/xai/settings", { baseUrl: u, model: modelInput.value.trim() || "llama3.2:3b" });
+            toast("Local engine saved", "ok");
             window.refreshView();
           } catch (e) { toast(e.message, "err", 6000); }
         } }),
-        cfg.keyConfigured ? el("button", { class: "btn danger sm", text: "Remove", on: async () => {
-          if (!confirm("Remove the xAI key? Auto replies stop until a new one is added.")) return;
-          await api.del("/xai/key");
-          toast("Key removed", "warn");
-          window.refreshView();
-        } }) : null,
-        el("button", { class: "btn sm", text: "⚡ Test connection", on: async () => {
-          try {
-            const r = await api.post("/xai/test");
-            toast(`Connected — ${r.model} · ${r.usageMs}ms · said "${(r.sample || "").slice(0, 60)}"`, "ok", 7000);
-          } catch (e) { toast(`Test failed: ${e.message}`, "err", 8000); }
-        } })
+        testBtnLocal
       )
-    )
-  );
+    );
+  } else {
+    const keyInput = el("input", { type: "password", placeholder: "xai-xxxxxxxxxxxxxxxx", autocomplete: "off", style: "font-family:var(--mono)" });
+    engineCard = card("xAI API key", "kept only on this server, never exposed to the browser",
+      el("div", { class: "stack", style: "max-width:560px" },
+        el("label", { class: "field" },
+          el("span", { text: cfg.keyConfigured ? `Key configured (ends ${cfg.keyLast4}) — paste a new one to replace` : "Paste your xAI API key" }),
+          keyInput
+        ),
+        el("div", { class: "row" },
+          el("button", { class: "btn primary sm", text: cfg.keyConfigured ? "Replace key" : "Save key", on: async () => {
+            const v = keyInput.value.trim();
+            if (!v) return toast("enter a key first", "warn");
+            try {
+              await api.put("/xai/key", { key: v });
+              keyInput.value = "";
+              toast("API key saved server-side", "ok");
+              window.refreshView();
+            } catch (e) { toast(e.message, "err", 6000); }
+          } }),
+          cfg.keyConfigured ? el("button", { class: "btn danger sm", text: "Remove", on: async () => {
+            if (!confirm("Remove the xAI key? Auto replies stop until a new one is added.")) return;
+            await api.del("/xai/key");
+            toast("Key removed", "warn");
+            window.refreshView();
+          } }) : null,
+          el("button", { class: "btn sm", text: "⚡ Test connection", on: async () => {
+            try {
+              const r = await api.post("/xai/test");
+              toast(`Connected — ${r.model} · ${r.usageMs}ms · said "${(r.sample || "").slice(0, 60)}"`, "ok", 7000);
+            } catch (e) { toast(`Test failed: ${e.message}`, "err", 8000); }
+          } })
+        )
+      )
+    );
+  }
 
   /* model + tuning card */
   const modelSelect = el("select");
@@ -217,18 +284,19 @@ export async function renderAI(host) {
       const r = await api.get("/xai/models");
       const list = r.models || [];
       for (const m of list) {
-        const p = m.pricing ? ` · $${m.pricing.in}/$${m.pricing.out} per M tok` : "";
+        const p = m.pricing && (m.pricing.in || m.pricing.out) ? ` · $${m.pricing.in}/$${m.pricing.out} per M tok` : m.pricing ? " · free" : "";
         modelSelect.append(el("option", { value: m.id, text: `${m.label || m.id}${p}`, selected: m.id === cfg.model }));
       }
       if (cfg.model && ![...modelSelect.options].some((o) => o.value === cfg.model)) {
-        modelSelect.append(el("option", { value: cfg.model, text: `${cfg.model} (saved)`, selected: true }));
+        modelSelect.append(el("option", { value: cfg.model, text: `${cfg.model} (saved)${isLocal ? " · local" : ""}`, selected: true }));
       }
       updatePrice();
-    } catch { modelSelect.append(el("option", { value: cfg.model || "grok-4-fast-reasoning", text: cfg.model || "grok-4-fast-reasoning" })); }
+    } catch { modelSelect.append(el("option", { value: cfg.model || "llama3.2:3b", text: cfg.model || "llama3.2:3b" })); }
   };
   const updatePrice = () => {
     const v = modelSelect.value;
-    priceLine.textContent = v.startsWith("grok-4-fast") ? "grok-4-fast: ~$0.20 in / $0.50 out per 1M tokens — cheap enough for constant chat"
+    priceLine.textContent = !v.startsWith("grok") ? "runs free on your own machine — $0 forever"
+      : v.startsWith("grok-4-fast") ? "grok-4-fast: ~$0.20 in / $0.50 out per 1M tokens — cheap enough for constant chat"
       : v.includes("mini") ? "mini tier: very cheap, good for banter"
       : v.includes("grok-3") || v.includes("grok-2") ? "full-size models cost ~$3/$15 per M — watch the daily cap"
       : "";
@@ -238,9 +306,9 @@ export async function renderAI(host) {
 
   const temp = slider("Temperature (creativity)", 0.1, 1, 0.05, cfg.temperature);
   const toks = slider("Max reply length (tokens)", 40, 700, 10, cfg.maxOutputTokens);
-  const timeout = slider("Request timeout (s)", 4, 40, 1, Math.round((cfg.requestTimeoutMs || 25000) / 1000));
+  const timeout = slider("Request timeout (s) — local models can be slow", 4, 150, 1, Math.round((cfg.requestTimeoutMs || 25000) / 1000));
 
-  const modelCard = card("Model & sampling", "which Grok model replies and how it sounds",
+  const modelCard = card("Model & sampling", isLocal ? "which local model replies and how it sounds" : "which Grok model replies and how it sounds",
     modelSelect, priceLine, temp.el, toks.el, timeout.el,
     el("button", { class: "btn sm", text: "Save tuning", on: async () => {
       await api.put("/xai/settings", {
@@ -253,13 +321,14 @@ export async function renderAI(host) {
     } })
   );
 
-  /* limits card */
+  /* limits card (cost caps only matter for paid mode) */
   const rl = cfg.rateLimit || {};
   const rpm = numberField("Requests / minute", rl.requestsPerMinute ?? 20);
   const usd = numberField("Daily spend cap ($)", rl.maxDailyCostUsd ?? 5, 0.5);
   const dreq = numberField("Daily request cap", rl.maxDailyRequests ?? 600);
-  const limitsCard = card("Spending & rate controls", "hard ceilings — the API refuses calls beyond them, auto-replies pause gracefully",
-    rpm.el, usd.el, dreq.el,
+  const limitsCard = card(isLocal ? "Rate controls (free — cost caps are moot)" : "Spending & rate controls",
+    isLocal ? "the model never charges, but rate caps still protect your CPU from spam floods" : "hard ceilings — the API refuses calls beyond them, auto-replies pause gracefully",
+    rpm.el, ...(isLocal ? [] : [usd.el]), dreq.el,
     el("button", { class: "btn sm", text: "Save limits", on: async () => {
       await api.put("/xai/limits", { requestsPerMinute: rpm.get(), maxDailyCostUsd: usd.get(), maxDailyRequests: dreq.get() });
       toast("Limits saved", "ok");
@@ -267,15 +336,15 @@ export async function renderAI(host) {
   );
 
   const usage = (await api.get("/xai/usage")).usage;
-  const usageCard = card("Usage today", "computed from API-reported token usage",
+  const usageCard = card("Usage today", isLocal ? "your own hardware — no tokens to bill" : "computed from API-reported token usage",
     el("div", { class: "grid tiles" },
       tile("Calls", String(usage.today.requests), `${usage.callsLastMinute} in last minute`),
-      tile("Est. spend", `$${(usage.today.usd || 0).toFixed(4)}`, "priced per model"),
-      tile("Budget used", `${rl.maxDailyCostUsd ? Math.min(100, Math.round(((usage.today.usd || 0) / rl.maxDailyCostUsd) * 100)) : 0}%`, (usage.today.usd || 0) >= (rl.maxDailyCostUsd || 0) ? "capped — replies paused" : "replies running")
+      tile(isLocal ? "Cost" : "Est. spend", isLocal ? "$0.0000" : `$${(usage.today.usd || 0).toFixed(4)}`, isLocal ? "local model, zero budget" : "priced per model"),
+      tile("Budget used", isLocal ? "0%" : `${rl.maxDailyCostUsd ? Math.min(100, Math.round(((usage.today.usd || 0) / rl.maxDailyCostUsd) * 100)) : 0}%`, (usage.today.usd || 0) >= (rl.maxDailyCostUsd || 0) && !isLocal ? "capped — replies paused" : "replies running")
     )
   );
 
-  host.append(keyCard, el("div", { class: "grid c2" }, modelCard, limitsCard), usageCard);
+  host.append(providerCard, el("div", { class: "grid c2" }, engineCard, modelCard), limitsCard, usageCard);
 }
 
 /* ══ DISCORD ═══════════════════════════════════════════════════════ */

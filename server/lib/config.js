@@ -39,8 +39,8 @@ export const DEFAULTS = {
   xai: {
     apiKeySet: false,
     apiKeyLast4: "",
-    model: "grok-4-fast-reasoning",
-    baseUrl: "https://api.x.ai/v1",
+    model: "llama3.2:3b",
+    baseUrl: "http://127.0.0.1:11434/v1",
     maxOutputTokens: 250,
     temperature: 0.85,
     topP: 0.95,

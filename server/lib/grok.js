@@ -15,6 +15,20 @@ export const GROK_MODELS = [
   { id: "grok-2-1212", label: "Grok 2 (legacy)", ctx: 131_072, pricing: { in: 2.0, out: 10.0 } },
 ];
 
+// ── local (free) models — any OpenAI-compatible server on your own box ──
+export const LOCAL_MODELS = [
+  { id: "llama3.2:3b", label: "Llama 3.2 3B (free, runs on your server)", ctx: 131_072, pricing: { in: 0, out: 0 } },
+  { id: "llama3.2:3b-instruct-q4_K_M", label: "Llama 3.2 3B Q4 (low-RAM servers, ~2GB)", ctx: 131_072, pricing: { in: 0, out: 0 } },
+  { id: "llama3.2:1b", label: "Llama 3.2 1B (super light, ~1.3GB)", ctx: 131_072, pricing: { in: 0, out: 0 } },
+];
+export const DEFAULT_LOCAL_BASE_URL = "http://127.0.0.1:11434/v1";
+
+export function isLocalBase(baseUrl) {
+  const b = String(baseUrl || "").trim();
+  if (!b) return false;
+  return !/api\.x\.ai/i.test(b);
+}
+
 // ── spend + rpm tracking ─────────────────────────────────────────
 let callHistory = [];      // timestamps of last-minute requests
 let dayUsage = { date: "", requests: 0, usd: 0 };
@@ -71,6 +85,7 @@ export class GrokError extends Error {
 function modelPricing(model) {
   const found = GROK_MODELS.find((m) => m.id === model);
   if (found) return found.pricing;
+  if (!model.startsWith("grok")) return { in: 0, out: 0 };   // local / self-hosted models are free
   if (model.includes("fast")) return { in: 0.2, out: 0.5 };
   if (model.includes("mini")) return { in: 0.3, out: 0.5 };
   return { in: 3.0, out: 15.0 };
@@ -86,17 +101,26 @@ export function estimateCost(model, usage) {
 
 async function grokFetch(endpoint, body, timeoutMs) {
   const key = getSecret("xai");
-  if (!key) throw new GrokError("No xAI API key configured", 401);
-
   const cfg = getConfig().xai;
   const base = cfg.baseUrl || "https://api.x.ai/v1";
+  // official x.ai endpoint demands a key; local servers (Ollama, llama.cpp, vLLM…) ignore auth
+  if (!key && /^https:\/\/(api\.)?x\.ai/i.test(base)) throw new GrokError("No xAI API key configured", 401);
+
   const controller = new AbortController();
-  const t = setTimeout(() => controller.abort(), timeoutMs || cfg.requestTimeoutMs || 25_000);
+  // local CPU inference is slow — never time out a healthy local model below 90s
+  const local = isLocalBase(base);
+  const effectiveTimeout = local
+    ? Math.max(timeoutMs || 0, 90_000)
+    : (timeoutMs || cfg.requestTimeoutMs || 25_000);
+  const t = setTimeout(() => controller.abort(), effectiveTimeout);
 
   try {
-    const res = await fetch(`${base}${endpoint}`, {
+    const headers = { "Content-Type": "application/json" };
+    if (key) headers.Authorization = `Bearer ${key}`;
+    const url = `${base}${endpoint}`;
+    const res = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+      headers,
       body: JSON.stringify(body),
       signal: controller.signal,
     });
@@ -106,13 +130,13 @@ async function grokFetch(endpoint, body, timeoutMs) {
 
     if (!res.ok) {
       const msg = json?.error || json?.msg || text.slice(0, 300) || `HTTP ${res.status}`;
-      throw new GrokError(`xAI API ${res.status}: ${msg}`, res.status, json);
+      throw new GrokError(`LLM API ${res.status}: ${msg}`, res.status, json);
     }
     return json;
   } catch (err) {
     if (err instanceof GrokError) throw err;
-    if (err.name === "AbortError") throw new GrokError("xAI request timed out", 504);
-    throw new GrokError(`xAI connection failed: ${err.message}`, 502);
+    if (err.name === "AbortError") throw new GrokError(local ? "Local model is taking too long (or isn't running)" : "LLM request timed out", 504);
+    throw new GrokError(`LLM connection failed: ${err.message} — is the model server running?`, 502);
   } finally {
     clearTimeout(t);
   }
@@ -120,25 +144,33 @@ async function grokFetch(endpoint, body, timeoutMs) {
 
 export async function listModels() {
   const key = getSecret("xai");
-  if (!key) return { ok: false, models: GROK_MODELS, error: "no key" };
+  const base = getConfig().xai.baseUrl || "https://api.x.ai/v1";
+  const local = isLocalBase(base);
+  if (!key && !local) return { ok: false, models: GROK_MODELS, error: "no key" };
   try {
     checkRateLimits();
-    const cfg = getConfig().xai;
-    const base = cfg.baseUrl || "https://api.x.ai/v1";
-    const res = await fetch(`${base}/models`, { headers: { Authorization: `Bearer ${key}` } });
+    const headers = {};
+    if (key) headers.Authorization = `Bearer ${key}`;
+    const res = await fetch(`${base}/models`, { headers });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const json = await res.json();
-    const models = (json.data || []).map((m) => ({
+    let models = (json.data || []).map((m) => ({
       id: m.id,
-      label: m.id,
+      label: local ? `${m.id} (local)` : m.id,
       ctx: m.context_length || null,
-      pricing: null,
+      pricing: local ? { in: 0, out: 0 } : null,
     }));
+    if (local) {
+      // if the server hasn't pulled llama3.2 yet, still offer it as a choice
+      if (!models.some((m) => m.id.startsWith("llama3.2"))) {
+        models = [...models, ...LOCAL_MODELS];
+      }
+    }
     bumpDaily(1, 0);
     return { ok: true, models, error: null };
   } catch (err) {
     log.warn("[grok] /models fetch failed — using built-in list:", err.message);
-    return { ok: false, models: GROK_MODELS, error: err.message };
+    return { ok: false, models: local ? LOCAL_MODELS : GROK_MODELS, error: err.message };
   }
 }
 
@@ -176,7 +208,7 @@ export async function chatComplete({ messages, maxTokens, temperature, topP, mod
   const choice = json?.choices?.[0];
   const content = choice?.message?.content || "";
   const usage = json?.usage || null;
-  const cost = estimateCost(payload.model, usage);
+  const cost = isLocalBase(cfg.baseUrl || "") ? 0 : estimateCost(payload.model, usage);
   bumpDaily(0, cost);
 
   lastResponseMeta = { model: payload.model, latencyMs, usage, cost };

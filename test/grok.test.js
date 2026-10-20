@@ -38,7 +38,7 @@ test("API errors map to GrokError with proper status", async () => {
 });
 
 test("missing API key throws a clear error", async () => {
-  updateConfig({ xai: { apiKey: "" } }, { immediate: true });
+  updateConfig({ xai: { apiKey: "", baseUrl: "https://api.x.ai/v1" } }, { immediate: true });
   await assert.rejects(() => chatComplete({ messages: [] }), (err) => /No xAI API key/.test(err.message));
   updateConfig({ xai: { apiKey: "xai-test-key-1234567890" } }, { immediate: true });
 });
@@ -54,4 +54,20 @@ test("cost estimate uses per-model pricing", () => {
   const big = estimateCost("grok-3", { prompt_tokens: 1_000_000, completion_tokens: 1_000_000 });
   assert.ok(Math.abs(big - (3 + 15)) < 1e-9);
   assert.equal(estimateCost("grok-3", null), 0);
+});
+
+test("local OpenAI-compatible endpoint works with no API key and costs $0", async () => {
+  updateConfig({ xai: { apiKey: "", baseUrl: "http://127.0.0.1:11434/v1" } }, { immediate: true });
+  mockFetch(() => new Response(JSON.stringify({
+    choices: [{ message: { content: "lol same tbh" } }],
+    usage: { prompt_tokens: 900, completion_tokens: 40 },
+  }), { status: 200, headers: { "Content-Type": "application/json" } }));
+
+  const res = await chatComplete({ messages: [{ role: "user", content: "hi" }], maxTokens: 100 });
+  assert.equal(res.content, "lol same tbh");
+  assert.ok(!("Authorization" in lastFetchArgs.opts.headers), "must not send auth header to local server");
+  assert.match(lastFetchArgs.url, /127\.0\.0\.1:11434\/v1\/chat\/completions/);
+  assert.equal(res.meta.cost, 0, "local models must report zero cost");
+  assert.equal(estimateCost("llama3.2:3b", { prompt_tokens: 1_000_000, completion_tokens: 1_000_000 }), 0);
+  updateConfig({ xai: { apiKey: "xai-test-key-1234567890", baseUrl: "https://api.x.ai/v1" } }, { immediate: true });
 });

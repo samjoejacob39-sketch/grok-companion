@@ -57,6 +57,8 @@ function publicConfig() {
       keyConfigured: hasSecret("xai"),
       keyLast4: cfg.xai.apiKeyLast4 || "",
       model: cfg.xai.model,
+      baseUrl: cfg.xai.baseUrl || "https://api.x.ai/v1",
+      localMode: !/api\.x\.ai/i.test(cfg.xai.baseUrl || "https://api.x.ai/v1"),
       temperature: cfg.xai.temperature,
       topP: cfg.xai.topP,
       maxOutputTokens: cfg.xai.maxOutputTokens,
@@ -184,10 +186,11 @@ router.put("/xai/settings", h((req, res) => {
   const b = req.body || {};
   const patch = {};
   if (typeof b.model === "string" && b.model.trim()) patch.model = b.model.trim();
+  if (typeof b.baseUrl === "string" && /^https?:\/\/\S+$/.test(b.baseUrl.trim())) patch.baseUrl = b.baseUrl.trim().replace(/\/+$/, "");
   if (typeof b.temperature === "number") patch.temperature = clampN(b.temperature, 0, 1.2);
   if (typeof b.topP === "number") patch.topP = clampN(b.topP, 0, 1);
   if (typeof b.maxOutputTokens === "number") patch.maxOutputTokens = Math.round(clampN(b.maxOutputTokens, 40, 4000));
-  if (typeof b.requestTimeoutMs === "number") patch.requestTimeoutMs = Math.round(clampN(b.requestTimeoutMs, 4000, 60000));
+  if (typeof b.requestTimeoutMs === "number") patch.requestTimeoutMs = Math.round(clampN(b.requestTimeoutMs, 4000, 240000));
   updateConfig({ xai: patch }, { immediate: true });
   audit("xai.settings", `LLM tuning: ${JSON.stringify(patch)}`);
   emit(res, publicConfig().xai);
