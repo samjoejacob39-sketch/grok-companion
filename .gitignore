@@ -7,3 +7,5 @@ smoke-*.log
 .smoke.pid
 test-output.txt
 *.tmp
+# unrelated user projects that live next to the repo root
+Dicord-Bot-For-Giveaway/
