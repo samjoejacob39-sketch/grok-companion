@@ -83,6 +83,7 @@ const SOURCE_LABEL = {
   "ai-approved": "AI · you approved",
   "compose": "you · sent via bot",
   "test": "test",
+  "dm": "AI · dm",
 };
 
 /* ══ OVERVIEW ══════════════════════════════════════════════════════ */

@@ -152,6 +152,22 @@ test("casual one-liners engage in selective mode even on a failed roll", () => {
   assert.equal(d3.allow, false, "run-of-the-mill chit-chat still follows the chance roll");
 });
 
+test("smart mode answers when a reply is required, gambles otherwise", () => {
+  const st = freshState();
+  const ch = baseChannel({ mode: "smart" });
+  // directly asked a question → reply required
+  const d1 = decide({ message: baseMsg({ content: "wait is the event tonight or tmrw" }), channelCfg: ch, replyCfg: cfg(), state: st, random: 0.99 });
+  assert.equal(d1.allow, true);
+  // ambient chit-chat with no requirement → small chance; missed here
+  const d2 = decide({ message: baseMsg({ content: "been grinding valorant all day tbh" }), channelCfg: ch, replyCfg: cfg(), state: st, random: 0.99 });
+  assert.equal(d2.allow, false);
+  assert.equal(d2.code, "smart_roll");
+  // recent bot activity = live convo with the bot → engage
+  st.lastReplyTsByChannel.set("ch1", Date.now() - 60_000);
+  const d3 = decide({ message: baseMsg({ content: "nah but fr tho same" }), channelCfg: ch, replyCfg: cfg(), state: st, random: 0.99 });
+  assert.equal(d3.allow, true);
+});
+
 test("postProcess lowercases, strips roles/quotes, applies glossary, flags violations", () => {
   const c = replaceConfig({
     personality: { ...DEFAULTS.personality, lowercase: true, glossary: { "mid": "broken" }, doNotSay: ["chads"] },

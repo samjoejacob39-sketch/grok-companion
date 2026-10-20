@@ -10,8 +10,11 @@ import { getConfig, updateConfig, getSecret } from "../lib/config.js";
 import { recordMessage, buildTranscript, learnQuestion, matchFaq, rememberAnswer } from "../lib/context.js";
 import {
   decide, markReplied, recordFailure, recordSuccess,
-  generateDraft, engineStats, getEngineState, MAX_CONCURRENT, resetBreaker,
+  generateDraft, postProcess, engineStats, getEngineState, MAX_CONCURRENT, resetBreaker,
 } from "../lib/engine.js";
+import { buildSystemPrompt } from "../lib/persona.js";
+import { chatComplete } from "../lib/grok.js";
+import { parseDmRequest } from "../lib/dmrelay.js";
 import { audit } from "../lib/audit.js";
 import { log } from "../lib/logger.js";
 import approvals from "./approvals.js";
@@ -211,6 +214,15 @@ export async function processMessage(msg) {
   if (!channelCfg) return;
   if ((cfg.discord.permissions.blockedUsers || []).includes(msg.author?.id)) return;
 
+  // explicit command: "@bot dm @user <something>" → relay into their DMs (bypasses the reply roll)
+  if (mentionedBot && !cfg.reply.stopped && cfg.discord.dmRelay !== false) {
+    const dmReq = parseDmRequest({ content: trimmed, mentionIds: [...(msg.mentions?.users?.keys() || [])] });
+    if (dmReq) {
+      handleDmRequest(msg, dmReq).catch((err) => log.error("[dm] relay failed:", err?.message || err));
+      return;   // don't ALSO fire the normal channel reply
+    }
+  }
+
   const trimmed = (msg.cleanContent || msg.content || "").trim();
   const isQ = trimmed.endsWith("?") || /^(what|why|how|who|where|when|can|could|should|does|is|are|will|anyone)\b/i.test(trimmed);
 
@@ -309,52 +321,173 @@ async function drainQueue() {
 async function runJob({ kind, channelId, channelName, messageCtx, triggerNorm, transcriptText, memoryFacts, faqEntries }) {
   const cfg = getConfig();
   const started = Date.now();
+  const typing = startTypingLoop(channelId);
 
-  const draftRes = await generateDraft({ transcriptText, triggerText: messageCtx.triggerContent, memoryFacts, faqEntries });
-  if (!draftRes.text) {
-    recordFailure(new Error("AI returned empty draft"));
-    return;
-  }
-  if (draftRes.violated) {
-    audit("reply.violation", "Draft discarded — hit do-not-say list", { channel: channelName });
-    return;
-  }
+  try {
+    const draftRes = await generateDraft({ transcriptText, triggerText: messageCtx.triggerContent, memoryFacts, faqEntries });
+    if (!draftRes.text) {
+      recordFailure(new Error("AI returned empty draft"));
+      return;
+    }
+    if (draftRes.violated) {
+      audit("reply.violation", "Draft discarded — hit do-not-say list", { channel: channelName });
+      return;
+    }
 
-  // approval mode (global or per-channel)
-  const approvalMode = cfg.generatedReply.mode === "approval" || channelApproval(channelId);
-  if (approvalMode) {
-    approvals.enqueueDraft({
-      channelId,
-      channelName,
-      guildId: client?.channels?.cache?.get(channelId)?.guildId,
-      authorId: messageCtx.authorId,
-      authorName: messageCtx.authorName,
-      triggerContent: messageCtx.triggerContent,
-      draft: draftRes.text,
-      reason: messageCtx.mentionedBot ? "mention" : messageCtx.isQuestion ? "question" : "selective",
+    // approval mode (global or per-channel)
+    const approvalMode = cfg.generatedReply.mode === "approval" || channelApproval(channelId);
+    if (approvalMode) {
+      approvals.enqueueDraft({
+        channelId,
+        channelName,
+        guildId: client?.channels?.cache?.get(channelId)?.guildId,
+        authorId: messageCtx.authorId,
+        authorName: messageCtx.authorName,
+        triggerContent: messageCtx.triggerContent,
+        draft: draftRes.text,
+        reason: messageCtx.mentionedBot ? "mention" : messageCtx.isQuestion ? "question" : "ambient",
+      });
+      return;
+    }
+
+    await sendAiMessage(channelId, draftRes.text, "ai-auto", null, {
+      latency: Date.now() - started,
+      triggerNorm,
     });
-    return;
+    // record what was answered so recurring questions get rephrased next time
+    const faqAfter = matchFaq(messageCtx.triggerContent);
+    if (faqAfter) rememberAnswer(faqAfter.display || messageCtx.triggerContent, draftRes.text);
+  } finally {
+    typing.stop();
   }
+}
 
-  await sendAiMessage(channelId, draftRes.text, kind, null, {
-    latency: Date.now() - started,
-    triggerNorm,
-  });
-  // record what was answered so recurring questions get rephrased next time
-  const faqAfter = matchFaq(triggerContent);
-  if (faqAfter) rememberAnswer(faqAfter.display || triggerContent, draftRes.text);
+/** keeps the "typing…" indicator alive while generation runs (Discord drops it after ~10s) */
+function startTypingLoop(channelId) {
+  const channel = client?.channels?.cache?.get(channelId);
+  if (!channel || typeof channel.sendTyping !== "function") return { stop() {} };
+  const timer = setInterval(() => { channel.sendTyping().catch(() => {}); }, 6000);
+  channel.sendTyping().catch(() => {});
+  return { stop: () => clearInterval(timer) };
 }
 
 function channelApproval(channelId) {
   return !!(getConfig().channels || []).find((c) => c.id === channelId)?.approvalMode;
 }
 
+// ── DM relay ─────────────────────────────────────────────────────
+
+const dmTracker = new Map();   // requesterId -> { day, count, lastTs }
+
+function dmRelayAllowed(requesterId) {
+  const now = Date.now();
+  const cfg = getConfig().reply;
+  const dayKey = new Date(now).toISOString().slice(0, 10);
+  const t = dmTracker.get(requesterId) || { day: dayKey, count: 0, lastTs: 0 };
+  if (t.day !== dayKey) { t.day = dayKey; t.count = 0; }
+  if (now - t.lastTs < 45_000) return { ok: false, why: "cooldown 45s between DM commands" };
+  const cap = getConfig().discord?.dmMaxPerDay ?? 20;
+  if (t.count >= cap) return { ok: false, why: `daily DM cap (${cap}) reached` };
+  t.lastTs = now; t.count += 1;
+  dmTracker.set(requesterId, t);
+  return { ok: true };
+}
+
+async function resolveDmTarget(msg, req) {
+  if (req.targetId) {
+    return msg.mentions?.users?.get(req.targetId)
+      || client?.users?.cache?.get(req.targetId)
+      || await client?.users?.fetch(req.targetId).catch(() => null)
+      || null;
+  }
+  if (req.targetName) {
+    // second ping in the same message that isn't the author/bot?
+    const other = [...(msg.mentions?.users?.values() || [])].find((u) => u.id !== msg.author?.id && u.id !== client?.user?.id);
+    if (other) return other;
+    const name = String(req.targetName).toLowerCase();
+    const members = await msg.guild?.members.fetch({ query: req.targetName, limit: 8 }).catch(() => null);
+    if (!members) return null;
+    const list = [...members.values()];
+    const hit = list.find((m) => m.user?.username?.toLowerCase() === name || m.displayName?.toLowerCase() === name);
+    return (hit || list[0])?.user || null;
+  }
+  return null;
+}
+
+async function generateDmDraft({ requesterName, targetName, instruction }) {
+  const cfg = getConfig();
+  const prompt = buildSystemPrompt({
+    personality: cfg.personality,
+    styleProfile: cfg.styleProfile || {},
+    facts: (cfg.memory.facts || []).slice(0, 8).map((f) => f.text),
+    faqs: [],
+    transcriptText: "",
+    triggerText: instruction,
+    warning: "",
+  });
+  const sys = `${prompt}\n\nMODE: PRIVATE DM DELIVERY. Write ONE direct message to ${targetName} on behalf of the community. A member named ${requesterName} asked you to do this: "${instruction}". If it's a joke → make it a short actually-funny one. If it's info → answer briefly and accurately. If it's a hello → greet warmly. ${cfg.reply.stopped ? "" : ""}Keep it 1–2 sentences, casual and lowercase: style matches your personality. No quotes, no role prefixes, no "here's your" meta-talk.`;
+  const messages = [{ role: "system", content: sys }, { role: "user", content: "Write the DM text only." }];
+  let res = await chatComplete({ messages });
+  let out = postProcess(res.content);
+  if (!String(out.text || "").trim()) {
+    res = await chatComplete({ messages, maxTokens: Math.max((cfg.xai.maxOutputTokens || 800) * 2, 1000) });
+    out = postProcess(res.content);
+  }
+  if (!String(out.text || "").trim()) throw new Error("model produced nothing for the DM");
+  return out.text.slice(0, 500);
+}
+
+export async function handleDmRequest(msg, req) {
+  const requesterId = msg.author?.id;
+  const allowed = dmRelayAllowed(requesterId);
+  if (!allowed.ok) return;   // silent throttle — no public scolding
+
+  try {
+    const target = await resolveDmTarget(msg, req);
+    if (!target) {
+      msg.channel.send("lo siento, can't figure out who that is — ping them right after the word dm, like: dm @name <thing>").catch(() => {});
+      audit("dm.unresolved", "DM target not found", { requester: requesterId });
+      return;
+    }
+    const botUser = client?.user;
+    if (target.id === requesterId) {
+      msg.channel.send("dm yourself? 😭 here's your message: it is what it is").catch(() => {});
+      return;
+    }
+    if (botUser && target.id === botUser.id) return;
+
+    const instruction = req.instruction || "say hi and drop a quick joke";
+    const started = Date.now();
+    const text = await generateDmDraft({ requesterName: msg.author?.username || "a member", targetName: target.username || "them", instruction });
+    const out = applyAiMarker(text, "dm");
+    try {
+      await target.send(out);
+    } catch (dmErr) {
+      msg.channel.send(`tried, but ${target.username}'s DMs are closed 🤷`).catch(() => {});
+      audit("dm.closed", `DMs to ${target.tag} are closed`, { requester: requesterId });
+      return;
+    }
+    sendLog.push({
+      ts: Date.now(), channelId: msg.channelId, channelName: `DM → ${target.username || target.tag}`,
+      source: "dm", text: out.slice(0, 300), latencyMs: Date.now() - started, draftId: null,
+    });
+    audit("dm.sent", `Delivered DM to ${target.tag} for ${msg.author?.username}`, { requester: requesterId });
+    recordSuccess();
+  } catch (err) {
+    recordFailure(err);
+    audit("dm.failed", err?.message || "dm relay failed", { requester: requesterId });
+    log.error("[dm] relay error:", err?.message || err);
+  }
+}
+
 // ── sending ──────────────────────────────────────────────────────
+
+const AI_KINDS = new Set(["companion", "ai-auto", "ai-approved", "dm"]);
 
 function applyAiMarker(text, kind) {
   const cfg = getConfig();
   if (cfg.generatedReply.disclosure === "never") return text;
-  if (kind !== "companion") return text;
+  if (!AI_KINDS.has(kind)) return text;   // compose/test messages stay unlabeled
   const symbol = cfg.generatedReply.markSymbol || "[AI]";
   return `${text} ${symbol}`.trim();
 }

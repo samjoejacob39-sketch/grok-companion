@@ -66,6 +66,7 @@ export const DEFAULTS = {
     stopped: false,
     mode: "selective",
     selectiveProbability: 0.25,
+    smartChance: 0.12,
     respondToCasual: true,
     minMessageChars: 2,
     cooldownSeconds: 180,

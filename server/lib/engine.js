@@ -75,6 +75,16 @@ export function decide({ message, channelCfg, replyCfg, state: st, random = Math
         if (random >= chance) return deny("selective_roll", `Selective roll: ${random.toFixed(2)} >= chance ${chance}`);
       }
       break;
+    case "smart": {
+      // reply only when it's actually needed: aimed at the bot, a question, or a live convo the bot is part of
+      const lastChannelTs = st.lastReplyTsByChannel?.get(channelCfg.id) || 0;
+      const convoActive = now - lastChannelTs < 5 * 60_000 && String(message.content || "").length <= 220;
+      if (!mentioned && !message.refToBot && !isQ && !casual && !convoActive) {
+        const chance = clampNum(channelCfg.replyChance ?? replyCfg.smartChance ?? 0.12, 0, 1);
+        if (random >= chance) return deny("smart_roll", "Smart: no reply required, ambient roll missed");
+      }
+      break;
+    }
     case "always":
       break; // any not-short message
     default:

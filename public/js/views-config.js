@@ -303,7 +303,7 @@ export async function renderChannels(host) {
     const modeRow = el("div", { class: "mode-row" });
     const modes = [
       ["off", "OFF"], ["mention", "Mention only"], ["question", "Questions only"],
-      ["selective", "Selective"], ["always", "Always"],
+      ["selective", "Selective"], ["smart", "🧠 Smart"], ["always", "Always"],
     ];
     for (const [value, label] of modes) {
       modeRow.append(el("div", { class: `mode-btn ${c.mode === value ? "on" : ""}`, text: label, on: async (ev) => {

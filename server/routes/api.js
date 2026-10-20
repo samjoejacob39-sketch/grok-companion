@@ -504,7 +504,7 @@ router.put("/channels/:id", h((req, res) => {
   if (b.guildId !== undefined) entry.guildId = String(b.guildId);
   if (b.mode !== undefined) {
     const m = String(b.mode).toLowerCase();
-    if (!["off", "mention", "question", "selective", "always"].includes(m)) return res.status(400).json({ error: `invalid mode ${m}` });
+    if (!["off", "mention", "question", "selective", "smart", "always"].includes(m)) return res.status(400).json({ error: `invalid mode ${m}` });
     entry.mode = m;
   }
   if (b.enabled !== undefined) entry.enabled = !!b.enabled;
@@ -539,7 +539,7 @@ router.put("/reply", h((req, res) => {
   if (typeof b.respondToCasual === "boolean") patch.respondToCasual = b.respondToCasual;
   if (b.minMessageChars !== undefined) patch.minMessageChars = Math.round(clampN(b.minMessageChars, 1, 50));
   if (Array.isArray(b.blockedKeywords)) patch.blockedKeywords = b.blockedKeywords.map((s) => String(s).slice(0, 80)).filter(Boolean).slice(0, 60);
-  if (b.defaultMode !== undefined && ["off", "mention", "question", "selective", "always"].includes(String(b.defaultMode))) {
+  if (b.defaultMode !== undefined && ["off", "mention", "question", "selective", "smart", "always"].includes(String(b.defaultMode))) {
     patch.selectiveModeDefault = String(b.defaultMode);
   }
   updateConfig({ reply: patch }, { immediate: true });

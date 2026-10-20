@@ -220,11 +220,11 @@ export async function chatComplete({ messages, maxTokens, temperature, topP, mod
     stream: false,
   };
 
-  // "thinking" models reason before answering and can eat the whole token budget
+  // "thinking" models reason before answering and can eat the whole token budget — turn thinking OFF
   const thinkingModel = /nemotron|deepseek-?r1|qwq|thinking|reasoning|o[13]-|gpt-?5/i.test(payload.model);
   if (thinkingModel) {
-    payload.reasoning = { effort: "low" };                       // OpenRouter hint (other servers ignore it)
-    payload.max_tokens = Math.max(payload.max_tokens, 1200);     // room for thinking + the actual reply
+    payload.reasoning = { enabled: false };                      // OpenRouter hint: no hidden thinking (other servers ignore it)
+    payload.max_tokens = Math.max(payload.max_tokens, 1200);     // insurance if a server ignores the toggle
   }
 
   const started = Date.now();
