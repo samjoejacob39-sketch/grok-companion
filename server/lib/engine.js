@@ -27,6 +27,14 @@ const state = {
 const REPLY_DUP_SIMILARITY = 0.82;
 export const MAX_CONCURRENT = 2;
 
+// casual one-liners (heyy, yo, lol…) — worth engaging even though they're tiny
+const CASUAL_CHAT_RE = /^(h+ey+y*|hi+|heya+|hello+|yo+|sup|wassup|whats up|what'?s up|wyd|hola|gm+|gn+|oi+|lol|lmao|bruh|bro|broo|haha+|hehe+|rip|oof)$/i;
+
+export function isCasualGreeting(text) {
+  const t = String(text || "").trim().toLowerCase().replace(/[!.?,…\s]+$/g, "");
+  return t.length > 0 && t.length <= 24 && CASUAL_CHAT_RE.test(t);
+}
+
 // ── pure decision ────────────────────────────────────────────────
 
 /**
@@ -51,6 +59,8 @@ export function decide({ message, channelCfg, replyCfg, state: st, random = Math
 
   const mentioned = !!message.mentionedBot;
   const isQ = looksLikeQuestion(message.content);
+  // casual one-liners are always worth at least a shot (unless the owner turned them off)
+  const casual = replyCfg.respondToCasual !== false && isCasualGreeting(message.content);
 
   switch (mode) {
     case "mention":
@@ -60,7 +70,7 @@ export function decide({ message, channelCfg, replyCfg, state: st, random = Math
       if (!mentioned && !isQ) return deny("question_absent", "Waiting for a question");
       break;
     case "selective":
-      if (!mentioned && !isQ) {
+      if (!mentioned && !isQ && !casual) {
         const chance = clampNum(channelCfg.replyChance ?? replyCfg.selectiveProbability ?? 0.25, 0, 1);
         if (random >= chance) return deny("selective_roll", `Selective roll: ${random.toFixed(2)} >= chance ${chance}`);
       }
@@ -75,7 +85,8 @@ export function decide({ message, channelCfg, replyCfg, state: st, random = Math
   const lowText = String(message.content || "").toLowerCase();
   const kwHit = (replyCfg.blockedKeywords || []).find((kw) => kw && lowText.includes(String(kw).toLowerCase()));
   if (kwHit) return deny("keyword_block", `Owner-blocked keyword: "${kwHit}"`);
-  if (normalize(lowText).length < 4) return deny("too_short", "Message too short to reply to");
+  const minLen = numC(replyCfg.minMessageChars, 2);
+  if (!casual && normalize(lowText).length < minLen) return deny("too_short", "Message too short to reply to");
 
   // per-channel hourly cap
   const hourKey = `${channelCfg.id}:${bucketHour(now)}`;
@@ -96,11 +107,14 @@ export function decide({ message, channelCfg, replyCfg, state: st, random = Math
   if (sinceG < gcd * 1000) return deny("cooldown_global", `Global cooldown: ${Math.ceil((gcd * 1000 - sinceG) / 1000)}s left`);
 
   // duplicate prevention: nearly identical trigger already answered recently (per channel)
+  // casual one-liners skip this — saying "heyy" twice in a day shouldn't mute the bot
   const winMs = numC(replyCfg.duplicateWindowHours, 36) * 3600_000;
   const raw = normalize(message.content);
-  for (const r of st.recentReplies?.get(channelCfg.id) || []) {
-    if (now - r.ts < winMs && r.triggerNorm && trigramSimilarity(r.triggerNorm, raw) >= REPLY_DUP_SIMILARITY) {
-      return deny("duplicate_trigger", "Similar trigger already answered recently");
+  if (!casual) {
+    for (const r of st.recentReplies?.get(channelCfg.id) || []) {
+      if (now - r.ts < winMs && r.triggerNorm && trigramSimilarity(r.triggerNorm, raw) >= REPLY_DUP_SIMILARITY) {
+        return deny("duplicate_trigger", "Similar trigger already answered recently");
+      }
     }
   }
 
@@ -210,10 +224,19 @@ export async function generateDraft({ transcriptText, triggerText, memoryFacts =
 
   let res = await chatComplete({ messages });
   let out = postProcess(res.content);
+  // thinking models can burn the whole token budget reasoning and return 0 characters — give them room
+  if (!String(out.text || "").trim()) {
+    log.warn("[engine] empty draft (model spent its budget thinking) — retrying with ~2x tokens");
+    res = await chatComplete({ messages, maxTokens: Math.max((getConfig().xai.maxOutputTokens || 250) * 2, 1000) });
+    out = postProcess(res.content);
+  }
   if (out.violated) {
     log.warn("[engine] draft violated do-not-say; retrying once");
     res = await chatComplete({ messages });
     out = postProcess(res.content);
+  }
+  if (!String(out.text || "").trim()) {
+    throw new Error("model replied with nothing (it used all its tokens reasoning) — raise 'Max reply length' on the AI page, or pick a non-thinking model");
   }
   return { text: out.text, violated: out.violated, usage: res.usage, meta: res.meta };
 }

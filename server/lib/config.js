@@ -41,7 +41,7 @@ export const DEFAULTS = {
     apiKeyLast4: "",
     model: "nvidia/nemotron-3.5-lightning:free",
     baseUrl: "https://openrouter.ai/api/v1",
-    maxOutputTokens: 250,
+    maxOutputTokens: 800,   // thinking models (nemotron…) spend tokens reasoning before answering
     temperature: 0.85,
     topP: 0.95,
     requestTimeoutMs: 25000,
@@ -65,6 +65,9 @@ export const DEFAULTS = {
   reply: {
     stopped: false,
     mode: "selective",
+    selectiveProbability: 0.25,
+    respondToCasual: true,
+    minMessageChars: 2,
     cooldownSeconds: 180,
     globalCooldownSeconds: 30,
     maxPerChannelHour: 12,
@@ -111,7 +114,9 @@ export const DEFAULTS = {
 function loadFromDisk() {
   if (!existsSync(CONFIG_FILE)) return null;
   try {
-    return JSON.parse(readFileSync(CONFIG_FILE, "utf8"));
+    let text = readFileSync(CONFIG_FILE, "utf8");
+    if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);   // strip UTF-8 BOM (external editors add it)
+    return JSON.parse(text);
   } catch (err) {
     console.error("[config] failed to parse config.json — falling back to defaults:", err.message);
     return null;

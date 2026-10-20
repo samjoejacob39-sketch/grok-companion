@@ -130,9 +130,26 @@ test("duplicate trigger suppression", () => {
 
 test("too-short messages are never worth it", () => {
   const st = freshState();
-  const d = decide({ message: baseMsg({ mentionedBot: true, content: "ok" }), channelCfg: baseChannel(), replyCfg: cfg(), state: st });
+  const d = decide({ message: baseMsg({ mentionedBot: true, content: "ok" }), channelCfg: baseChannel(), replyCfg: cfg({ minMessageChars: 4 }), state: st });
   assert.equal(d.allow, false);
   assert.equal(d.code, "too_short");
+  // with the default length floor, casual one-liners like "heyy" sail through instead
+  const d2 = decide({ message: baseMsg({ mentionedBot: true, content: "heyy" }), channelCfg: baseChannel(), replyCfg: cfg(), state: st });
+  assert.equal(d2.allow, true);
+});
+
+test("casual one-liners engage in selective mode even on a failed roll", () => {
+  const st = freshState();
+  const ch = baseChannel({ mode: "selective" });
+  const d = decide({ message: baseMsg({ content: "heyy" }), channelCfg: ch, replyCfg: cfg(), state: st, random: 0.99 });
+  assert.equal(d.allow, true);
+  // turn them off → back to the normal selective roll
+  const d2 = decide({ message: baseMsg({ content: "heyy" }), channelCfg: ch, replyCfg: cfg({ respondToCasual: false }), state: st, random: 0.99 });
+  assert.equal(d2.allow, false);
+  assert.equal(d2.code, "selective_roll");
+  // long messages that merely START with "hey" are not casual (nor questions) → normal roll applies
+  const d3 = decide({ message: baseMsg({ content: "hey man remember when we owned those noobs yesterday" }), channelCfg: ch, replyCfg: cfg(), state: st, random: 0.99 });
+  assert.equal(d3.allow, false, "run-of-the-mill chit-chat still follows the chance roll");
 });
 
 test("postProcess lowercases, strips roles/quotes, applies glossary, flags violations", () => {
