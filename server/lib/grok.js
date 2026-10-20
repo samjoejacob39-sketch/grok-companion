@@ -220,11 +220,21 @@ export async function chatComplete({ messages, maxTokens, temperature, topP, mod
     stream: false,
   };
 
+  // "thinking" models reason before answering and can eat the whole token budget
+  const thinkingModel = /nemotron|deepseek-?r1|qwq|thinking|reasoning|o[13]-|gpt-?5/i.test(payload.model);
+  if (thinkingModel) {
+    payload.reasoning = { effort: "low" };                       // OpenRouter hint (other servers ignore it)
+    payload.max_tokens = Math.max(payload.max_tokens, 1200);     // room for thinking + the actual reply
+  }
+
   const started = Date.now();
   bumpDaily(1, 0);
   if (rateLimited) callHistory.push(Date.now());
 
-  const json = await grokFetch("/chat/completions", payload, cfg.requestTimeoutMs);
+  const timeoutMs = thinkingModel
+    ? Math.max(cfg.requestTimeoutMs || 25_000, 60_000)
+    : cfg.requestTimeoutMs;
+  const json = await grokFetch("/chat/completions", payload, timeoutMs);
   const latencyMs = Date.now() - started;
 
   const choice = json?.choices?.[0];

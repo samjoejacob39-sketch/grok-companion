@@ -44,7 +44,7 @@ export const DEFAULTS = {
     maxOutputTokens: 800,   // thinking models (nemotron…) spend tokens reasoning before answering
     temperature: 0.85,
     topP: 0.95,
-    requestTimeoutMs: 25000,
+    requestTimeoutMs: 45000,
     rateLimit: { requestsPerMinute: 20, maxDailyCostUsd: 5, maxDailyRequests: 600 },
   },
   discord: {
