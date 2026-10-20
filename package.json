@@ -1,0 +1,19 @@
+﻿{
+  "name": "grok-companion",
+  "version": "1.0.0",
+  "description": "Self-hosted AI Discord companion - xAI Grok powered, style-cloned, owner-controlled.",
+  "type": "module",
+  "engines": { "node": ">=20.0.0" },
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "test": "node --test --import ./test/setup.mjs \"./test/*.test.js\""
+  },
+  "dependencies": {
+    "discord.js": "^14.16.3",
+    "express": "^4.21.2"
+  },
+  "author": "owner",
+  "license": "MIT"
+}

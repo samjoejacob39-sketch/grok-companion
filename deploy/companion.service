@@ -1,0 +1,44 @@
+[Unit]
+Description=Companion — xAI Grok Discord AI (dashboard + 24/7 bot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# adjust to your install path
+WorkingDirectory=/opt/companion
+ExecStart=/usr/bin/node /opt/companion/server/index.js
+Restart=always
+RestartSec=5
+StartLimitBurst=0
+
+# Sane production hygiene
+Environment=NODE_ENV=production
+Environment=PORT=3000
+Environment=HOST=0.0.0.0
+Environment=LOG_LEVEL=info
+# Optional first-run seeds (prefer filling these once, then systemd loads them):
+# Environment=ADMIN_PASSWORD=change-me-please-8chars
+# Environment=XAI_API_KEY=
+# Environment=DISCORD_BOT_TOKEN=
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+LimitNOFILE=65535
+
+User=companion
+Group=companion
+# data dir is the only writable location (trailing slash matters)
+ReadWritePaths=/opt/companion/data
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,26 @@
+# Compose file for the 24/7 deployment. Data survives container restarts.
+services:
+  companion:
+    build: .
+    container_name: companion
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - HOST=0.0.0.0
+      # First-run seeds (only applied if not already configured):
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env, min 8 chars}
+      # Optional API-key seeding — you can also add keys in the dashboard:
+      # - XAI_API_KEY=${XAI_API_KEY:-}
+      # - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN:-}
+    volumes:
+      - ./data:/app/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Optional: auto-updating companion image via watchtower is NOT recommended
+  # for a single-service host — update manually: docker compose build && up -d

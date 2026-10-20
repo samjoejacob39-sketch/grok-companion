@@ -1,0 +1,5 @@
+# Normalized line endings — this deploys to Linux (systemd unit, Dockerfile)
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.gif binary

@@ -1,0 +1,9 @@
+node_modules/
+data/
+data/logs/*
+*.log
+.env
+smoke-*.log
+.smoke.pid
+test-output.txt
+*.tmp
