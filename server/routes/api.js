@@ -584,7 +584,7 @@ router.post("/approvals/:id/send", h(async (req, res) => {
   const d = approvals.getDraft(parseInt(req.params.id, 10));
   if (!d) return res.status(404).json({ error: "draft not found" });
   const text = req.body?.text ? String(req.body.text) : d.draft;
-  const result = await sendApprovedDraft(d.channelId, text, d.id);
+  const result = await sendApprovedDraft(d.channelId, text, d.id, d.authorId);
   if (!result.ok) return res.status(502).json({ error: result.err });
   approvals.markSent(d.id, text);
   emit(res, { sent: true, id: result.id });

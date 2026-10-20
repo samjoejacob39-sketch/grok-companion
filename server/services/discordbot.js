@@ -20,6 +20,7 @@ import { log } from "../lib/logger.js";
 import approvals from "./approvals.js";
 
 let client = null;
+let membersIntent = false;   // true once login succeeds with the GuildMembers intent
 let currentStatus = "not_configured"; // not_configured|connecting|ready|reconnecting|error|stopped
 let lastReadyTs = 0;
 let ping = 0;
@@ -67,8 +68,8 @@ export function inviteUrl() {
     } catch { /* malformed */ }
   }
   if (!cid || !/^\d+$/.test(cid)) return "";
-  // ViewChannel 1024 + SendMessages 2048 + ReadMessageHistory 65536 = 68608
-  return `https://discord.com/oauth2/authorize?client_id=${cid}&scope=bot&permissions=68608`;
+  // Administrator (8) — owner asked for full server access on invite
+  return `https://discord.com/oauth2/authorize?client_id=${cid}&scope=bot&permissions=8`;
 }
 
 function setStatus(s, detail = "") {
@@ -91,22 +92,33 @@ export async function startBot() {
   }
   setStatus("connecting");
 
-  client = new Client({
-    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
-    partials: [Partials.Channel],
-  });
+  // GuildMembers unlocks full member lists (mass-DM broadcast). If the portal
+  // toggle is off, Discord refuses the login — retry without it instead of dying.
+  const withMembers = [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers];
+  const withoutMembers = [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent];
 
-  wireClient(client);
-
-  try {
-    await client.login(token);
-  } catch (err) {
-    setStatus("error", err?.message || "login failed");
-    log.error("[discord] login failed:", err?.message);
-    audit("discord.login_error", (err?.message || "login failed").slice(0, 300));
-    try { await client.destroy(); } catch { /* noop */ }
-    client = null;
-    return null;
+  for (const intents of [withMembers, withoutMembers]) {
+    client = new Client({ intents, partials: [Partials.Channel] });
+    wireClient(client);
+    try {
+      await client.login(token);
+      membersIntent = intents === withMembers;
+      return client;
+    } catch (err) {
+      const msg = err?.message || "login failed";
+      if (/disallowed intents/i.test(msg) && intents === withMembers) {
+        log.warn("[discord] SERVER MEMBERS INTENT is off in the portal — retrying without it (broadcast member lists will be limited until it's enabled: Developer Portal → Bot → Privileged Gateway Intents)");
+        try { await client.destroy(); } catch { /* noop */ }
+        client = null;
+        continue;   // retry with the reduced intent set
+      }
+      setStatus("error", msg);
+      log.error("[discord] login failed:", msg);
+      audit("discord.login_error", msg.slice(0, 300));
+      try { await client.destroy(); } catch { /* noop */ }
+      client = null;
+      return null;
+    }
   }
   return client;
 }
@@ -214,17 +226,17 @@ export async function processMessage(msg) {
   if (!channelCfg) return;
   if ((cfg.discord.permissions.blockedUsers || []).includes(msg.author?.id)) return;
 
-  // explicit command: "@bot dm @user <something>" → relay into their DMs (bypasses the reply roll)
+  const trimmed = (msg.cleanContent || msg.content || "").trim();
+  const isQ = trimmed.endsWith("?") || /^(what|why|how|who|where|when|can|could|should|does|is|are|will|anyone)\b/i.test(trimmed);
+
+  // explicit command: "@bot dm @user <something>" / "@bot broadcast <something>" → DM relay (bypasses the reply roll)
   if (mentionedBot && !cfg.reply.stopped && cfg.discord.dmRelay !== false) {
-    const dmReq = parseDmRequest({ content: trimmed, mentionIds: [...(msg.mentions?.users?.keys() || [])] });
+    const dmReq = parseDmRequest({ content: trimmed, botId: botUser?.id });
     if (dmReq) {
       handleDmRequest(msg, dmReq).catch((err) => log.error("[dm] relay failed:", err?.message || err));
       return;   // don't ALSO fire the normal channel reply
     }
   }
-
-  const trimmed = (msg.cleanContent || msg.content || "").trim();
-  const isQ = trimmed.endsWith("?") || /^(what|why|how|who|where|when|can|could|should|does|is|are|will|anyone)\b/i.test(trimmed);
 
   const decision = decide({
     message: {
@@ -269,11 +281,16 @@ export async function processMessage(msg) {
   if (!msg.channel.sendTyping) return;
   msg.channel.sendTyping().catch(() => {});
 
+  // ping the person we're answering (and reply-link their message) when the engagement was theirs
+  const shouldPing = decision.mentioned || decision.isQuestion || decision.casual || refToBot;
+
   queueJob({
     kind: "auto",
     channelId: msg.channelId,
     channelName: msg.channel?.name || "",
     guildId: msg.guildId,
+    replyToMessageId: msg.id,
+    mentionId: shouldPing ? msg.author?.id : null,
     messageCtx: {
       authorId: msg.author?.id,
       authorName: msg.author?.username || "",
@@ -318,7 +335,7 @@ async function drainQueue() {
   if (queue.length > 0) setImmediate(drainQueue);
 }
 
-async function runJob({ kind, channelId, channelName, messageCtx, triggerNorm, transcriptText, memoryFacts, faqEntries }) {
+async function runJob({ kind, channelId, channelName, messageCtx, triggerNorm, transcriptText, memoryFacts, faqEntries, replyToMessageId, mentionId }) {
   const cfg = getConfig();
   const started = Date.now();
   const typing = startTypingLoop(channelId);
@@ -353,6 +370,8 @@ async function runJob({ kind, channelId, channelName, messageCtx, triggerNorm, t
     await sendAiMessage(channelId, draftRes.text, "ai-auto", null, {
       latency: Date.now() - started,
       triggerNorm,
+      mentionId,
+      replyToMessageId,
     });
     // record what was answered so recurring questions get rephrased next time
     const faqAfter = matchFaq(messageCtx.triggerContent);
@@ -442,6 +461,11 @@ export async function handleDmRequest(msg, req) {
   const allowed = dmRelayAllowed(requesterId);
   if (!allowed.ok) return;   // silent throttle — no public scolding
 
+  // ── broadcast: "dm @everyone <text>" or "broadcast <text>" — ADMIN ONLY ──
+  if (req.broadcast) {
+    return broadcastEveryone(msg, req);
+  }
+
   try {
     const target = await resolveDmTarget(msg, req);
     if (!target) {
@@ -480,6 +504,62 @@ export async function handleDmRequest(msg, req) {
   }
 }
 
+/** Admin-only mass DM: "@bot dm @everyone <text>" — delivers verbatim text to every member. */
+async function broadcastEveryone(msg, req) {
+  const member = msg.member;
+  const isAdmin = !!(member?.permissions?.has?.("Administrator") || member?.permissions?.has?.("ManageGuild"));
+  if (!isAdmin) {
+    msg.channel.send("mass dms are admin-only, sry 🤝").catch(() => {});
+    audit("dm.broadcast_denied", "non-admin attempted broadcast", { requester: msg.author?.id });
+    return;
+  }
+  const text = String(req.instruction || "").trim().slice(0, 800);
+  if (!text) {
+    msg.channel.send("type the message too, like: dm @everyone <your text>").catch(() => {});
+    return;
+  }
+  const guild = msg.guild;
+  if (!guild) return;
+  if (!membersIntent) {
+    msg.channel.send("to mass-DM the whole server, the owner must enable SERVER MEMBERS INTENT first: Developer Portal → Bot → Privileged Gateway Intents → toggle on → restart the bot").catch(() => {});
+    audit("dm.broadcast_no_intent", "broadcast attempted without Server Members Intent");
+    return;
+  }
+
+  msg.channel.send("📬 collecting members… big servers take a bit").catch(() => {});
+  try {
+    const members = await guild.members.fetch();
+    const targets = [...members.values()].filter((m) => !m.user?.bot && m.id !== msg.author?.id);
+    const cap = getConfig().discord?.broadcastCap ?? 250;
+    const list = targets.slice(0, cap);
+    let sent = 0, failed = 0, consecutiveFail = 0;
+    for (const m of list) {
+      try {
+        await m.send(text);
+        sent += 1; consecutiveFail = 0;
+      } catch {
+        failed += 1; consecutiveFail += 1;
+        if (consecutiveFail >= 10) {
+          audit("dm.broadcast_aborted", "10 consecutive DM failures — stopping");
+          break;
+        }
+      }
+      await new Promise((r) => setTimeout(r, 2500));   // pacing — fast mass-DMing gets bots flagged
+    }
+    sendLog.push({
+      ts: Date.now(), channelId: msg.channelId, channelName: `broadcast → ${guild.name}`,
+      source: "dm", text: text.slice(0, 200), latencyMs: 0, draftId: null,
+    });
+    msg.channel.send(`📬 done — delivered to ${sent}${failed ? `, ${failed} unreachable (DMs closed)` : ""}`).catch(() => {});
+    audit("dm.broadcast", `Delivered to ${sent}/${list.length} members`, { requester: msg.author?.id });
+    recordSuccess();
+  } catch (err) {
+    msg.channel.send("couldn't fetch the member list — the bot needs the SERVER MEMBERS INTENT enabled (Developer Portal → Bot → Privileged Gateway Intents)").catch(() => {});
+    audit("dm.broadcast_failed", err?.message || "broadcast failed");
+    log.error("[dm] broadcast error:", err?.message || err);
+  }
+}
+
 // ── sending ──────────────────────────────────────────────────────
 
 const AI_KINDS = new Set(["companion", "ai-auto", "ai-approved", "dm"]);
@@ -499,7 +579,14 @@ export async function sendAiMessage(channelId, text, kind = "companion", draftId
   }
   try {
     const out = applyAiMarker(text, kind);
-    const msg = await channel.send(out);
+    // ping the person being answered + link their message as a reply
+    const content = extra.mentionId && /^\d+$/.test(String(extra.mentionId))
+      ? `<@${extra.mentionId}> ${out}`
+      : out;
+    const payload = extra.replyToMessageId
+      ? { content, reply: { messageReference: extra.replyToMessageId, failIfNotExists: false } }
+      : content;
+    const msg = await channel.send(payload);
     markReplied(channelId, out, extra.triggerNorm || "");
     recordSuccess();
     sendLog.push({
@@ -516,9 +603,11 @@ export async function sendAiMessage(channelId, text, kind = "companion", draftId
   }
 }
 
-/** Approved draft listener from the approvals flow. */
-export async function sendApprovedDraft(channelId, text, draftId) {
-  const res = await sendAiMessage(channelId, text, "ai-approved", draftId);
+/** Approved draft listener from the approvals flow. Pings the original triggerer. */
+export async function sendApprovedDraft(channelId, text, draftId, authorId = null) {
+  const res = await sendAiMessage(channelId, text, "ai-approved", draftId, {
+    mentionId: authorId && /^\d+$/.test(String(authorId)) ? authorId : null,
+  });
   if (res.ok) audit("approval.sent", `Approved draft sent`);
   else audit("approval.send_failed", res.err, {});
   return res;

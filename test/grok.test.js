@@ -91,3 +91,19 @@ test("hosted provider without any key gives a helpful error", async () => {
   await assert.rejects(() => chatComplete({ messages: [] }), (err) => /free one/.test(err.message));
   updateConfig({ xai: { apiKey: "xai-test-key-1234567890", baseUrl: "https://api.x.ai/v1" } }, { immediate: true });
 });
+
+test("thinking models: fast for banter, reasoning kept for thinkable questions", async () => {
+  updateConfig({ xai: { apiKey: "sk-or-v1-testkey1234567890abcdefghij", baseUrl: "https://openrouter.ai/api/v1", model: "nvidia/nemotron-3.5-lightning:free" } }, { immediate: true });
+  mockFetch(() => new Response(JSON.stringify({ choices: [{ message: { content: "yo" } }] }), { status: 200 }));
+
+  await chatComplete({ messages: [{ role: "user", content: "heyy" }] });
+  let body = JSON.parse(lastFetchArgs.opts.body);
+  assert.deepEqual(body.reasoning, { enabled: false });
+
+  await chatComplete({ messages: [{ role: "user", content: "why does our event scheduling drift by hours every week? explain the difference between the two approaches" }] });
+  body = JSON.parse(lastFetchArgs.opts.body);
+  assert.deepEqual(body.reasoning, { effort: "medium" });
+  assert.ok(body.max_tokens >= 2000);
+
+  updateConfig({ xai: { apiKey: "xai-test-key-1234567890", baseUrl: "https://api.x.ai/v1", model: "grok-4-fast-reasoning" } }, { immediate: true });
+});

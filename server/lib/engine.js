@@ -44,7 +44,7 @@ export function isCasualGreeting(text) {
  * @param {object} replyCfg {stopped, mode, cooldownSeconds, globalCooldownSeconds, maxPerChannelHour, maxDailyReplies, duplicateWindowHours, blockedKeywords, selectiveProbability}
  * @param {object} state {lastReplyTsByChannel, lastReplyTsGlobal, hourly, dailyCount, recentReplies, breakerOpen}
  * @param {number} random 0..1 (for selective mode roll)
- * @returns {{allow:boolean, code:string, reason:string, mentioned?:boolean, isQuestion?:boolean}}
+ * @returns {{allow:boolean, code:string, reason:string, mentioned?:boolean, isQuestion?:boolean, casual?:boolean}}
  */
 export function decide({ message, channelCfg, replyCfg, state: st, random = Math.random() }) {
   const now = Date.now();
@@ -128,7 +128,7 @@ export function decide({ message, channelCfg, replyCfg, state: st, random = Math
     }
   }
 
-  return { allow: true, code: "ok", reason: "ok", mentioned, isQuestion: isQ };
+  return { allow: true, code: "ok", reason: "ok", mentioned, isQuestion: isQ, casual };
 }
 
 function deny(code, reason) { return { allow: false, code, reason }; }
