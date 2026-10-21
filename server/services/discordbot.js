@@ -565,7 +565,7 @@ export async function handleDmRequest(msg, req) {
     try {
       await target.send(out);
     } catch (dmErr) {
-      msg.channel.send(`tried, but ${target.username}'s DMs are closed 🤷`).catch(() => {});
+      msg.channel.send(`tried, but @${target.username}'s DMs are closed 🤷 — they can fix it in Discord: User Settings → Privacy & Safety → turn ON "Direct Messages from Server Members"`).catch(() => {});
       audit("dm.closed", `DMs to ${target.tag} are closed`, { requester: requesterId });
       return;
     }
@@ -629,7 +629,7 @@ async function broadcastEveryone(msg, req) {
       ts: Date.now(), channelId: msg.channelId, channelName: `broadcast → ${guild.name}`,
       source: "dm", text: text.slice(0, 200), latencyMs: 0, draftId: null,
     });
-    msg.channel.send(`📬 done — delivered to ${sent}${failed ? `, ${failed} unreachable (DMs closed)` : ""}`).catch(() => {});
+    msg.channel.send(`📬 done — delivered to ${sent}${failed ? `, ${failed} unreachable (their DMs are closed — members can enable "Direct Messages from Server Members" in Privacy & Safety)` : ""}`).catch(() => {});
     audit("dm.broadcast", `Delivered to ${sent}/${list.length} members`, { requester: msg.author?.id });
     recordSuccess();
   } catch (err) {
