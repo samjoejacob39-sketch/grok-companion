@@ -29,6 +29,18 @@ const sendLog = [];          // recent outgoing messages (audit trail)
 const MONITOR_LIMIT = 50;
 let monitor = [];            // connection-monitor ring buffer
 
+// last pipeline outcome per channel — powers the "@bot why" diagnostic
+const lastOutcome = new Map(); // channelId -> { ts, kind, detail }
+
+function noteOutcome(channelId, kind, detail = "") {
+  if (!channelId) return;
+  lastOutcome.set(channelId, { ts: Date.now(), kind, detail: String(detail || "").slice(0, 300) });
+  if (lastOutcome.size > 200) {
+    const cutoff = Date.now() - 24 * 3600 * 1000;
+    for (const [id, o] of lastOutcome) if (o.ts < cutoff) lastOutcome.delete(id);
+  }
+}
+
 // run queue
 const queue = [];
 let inFlight = 0;
@@ -191,6 +203,40 @@ function handleMessage(msg) {
 
 const REPLYABLE = new Set([ChannelType.GuildText, ChannelType.PublicThread, ChannelType.GuildAnnouncement, ChannelType.PrivateThread]);
 
+/** Quick self-checks that answer right in Discord: "@bot ping", "@bot why", "@bot test". */
+async function handleDiagCommand(msg, cmd) {
+  const cfg = getConfig();
+  const model = cfg.xai?.model || "unknown";
+
+  if (cmd === "ping") {
+    await msg.channel.send(
+      `🏓 online — model: ${model} · mode: ${cfg.reply.mode || "smart"} · stopped: ${cfg.reply.stopped ? "YES ⛔" : "no"}`
+    ).catch(() => {});
+    return;
+  }
+
+  if (cmd === "test") {
+    try {
+      const res = await chatComplete({ messages: [{ role: "user", content: "reply with exactly: model ok" }], maxTokens: 40 });
+      const out = String(res?.content || "").trim();
+      await msg.channel.send(`✅ model ok — "${(out || "(empty response)").slice(0, 90)}"`).catch(() => {});
+    } catch (err) {
+      await msg.channel.send(`❌ model error: ${String(err?.message || err).slice(0, 250)}`).catch(() => {});
+    }
+    return;
+  }
+
+  // why / status
+  const o = lastOutcome.get(msg.channelId);
+  const last = o
+    ? `${o.kind}${o.detail ? ` — ${o.detail}` : ""} (${Math.max(1, Math.round((Date.now() - o.ts) / 1000))}s ago)`
+    : "nothing yet in this channel";
+  await msg.channel.send(
+    `🧠 last outcome: ${last}\n` +
+    `mode: ${cfg.reply.mode} · stopped: ${cfg.reply.stopped ? "YES ⛔" : "no"} · cooldown: ${cfg.reply.cooldownSeconds}s / global ${cfg.reply.globalCooldownSeconds}s · caps: ${cfg.reply.maxPerChannelHour}/h, ${cfg.reply.maxDailyReplies}/day`
+  ).catch(() => {});
+}
+
 export async function processMessage(msg) {
   if (!msg || !msg.channel) return;
   if (!REPLYABLE.has(msg.channel.type)) return;
@@ -280,6 +326,13 @@ export async function processMessage(msg) {
     }
   }
 
+  // ── self-diagnostics: "@bot ping" / "@bot why" / "@bot test" — work in any channel ──
+  const diagCmd = /^(ping|why|status|test)\??$/i.exec(dmCmdText);
+  if (mentionedBot && diagCmd) {
+    handleDiagCommand(msg, diagCmd[1].toLowerCase()).catch((err) => log.error("[diag] failed:", err?.message || err));
+    return;
+  }
+
   // channel must be configured for normal AI conversation
   const channelCfg = (cfg.channels || []).find((ch) => ch.id === msg.channelId);
   if (!channelCfg) return;
@@ -309,6 +362,7 @@ export async function processMessage(msg) {
 
   if (!decision.allow) {
     log.info(`[engine] skip #${msg.channel?.name}: ${decision.code} — ${decision.reason}`);
+    noteOutcome(msg.channelId, "denied", `${decision.code} — ${decision.reason}`);
     return;
   }
 
@@ -376,6 +430,7 @@ async function drainQueue() {
       recordFailure(err);
       log.error("[engine] job failed:", err?.message || err);
       audit("reply.failed", err?.message || "job failed", { channel: job.channelName });
+      noteOutcome(job.channelId, "error", err?.message || "job failed");
     } finally {
       inFlight -= 1;
     }
@@ -404,6 +459,7 @@ async function runJob({ kind, channelId, channelName, messageCtx, triggerNorm, t
     }
     if (!draftRes.text) {
       recordFailure(new Error("AI returned empty draft"));
+      noteOutcome(channelId, "empty", "model returned an empty draft");
       return;
     }
     if (draftRes.violated) {
@@ -414,6 +470,7 @@ async function runJob({ kind, channelId, channelName, messageCtx, triggerNorm, t
     if (/^\s*\[\[\s*skip\s*\]\]/i.test(String(draftRes.text))) {
       log.info(`[engine] quiet #${channelName}: ai chose not to reply`);
       audit("reply.skip", "Model chose not to reply", { channel: channelName });
+      noteOutcome(channelId, "skipped", "model chose silence");
       return;
     }
 
@@ -430,6 +487,7 @@ async function runJob({ kind, channelId, channelName, messageCtx, triggerNorm, t
         draft: draftRes.text,
         reason: messageCtx.mentionedBot ? "mention" : messageCtx.isQuestion ? "question" : "ambient",
       });
+      noteOutcome(channelId, "queued", "draft waiting for approval");
       return;
     }
 
@@ -443,6 +501,7 @@ async function runJob({ kind, channelId, channelName, messageCtx, triggerNorm, t
       mentionId,
       replyToMessageId,
     });
+    noteOutcome(channelId, "sent", draftRes.text.slice(0, 120));
     // record what was answered so recurring questions get rephrased next time
     const faqAfter = matchFaq(messageCtx.triggerContent);
     if (faqAfter) rememberAnswer(faqAfter.display || messageCtx.triggerContent, draftRes.text);

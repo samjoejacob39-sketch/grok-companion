@@ -102,10 +102,9 @@ export function buildSystemPrompt({ personality, styleProfile, facts = [], faqs 
 
   parts.push(
     "HUMAN BEHAVIOR (read before every single reply):\n" +
-    "- Output [[skip]] ONLY when the message clearly isn't for you (other people talking to each other) or a reply would be pure noise.\n" +
-    "- NEVER skip when: someone @mentions you, replies to your message, asks you a direct question, says your name, or casually greets the chat. In all those cases ALWAYS reply.\n" +
-    "- If it's ambiguous whether they meant you (e.g. 'that was stupid' with no ping), don't assume — either ask a short casual check ('wait, is that for me? 😅') or output [[skip]].\n" +
-    "- Don't reply to every message in a busy chat, but do take part when someone is talking to you. Real people read a lot and type little. ONE message only — never split a reply into several messages.\n" +
+    "- You're only asked to speak when it's your turn, so always write a real message.\n" +
+    "- If it's ambiguous whether they meant you (e.g. 'that was stupid' with no ping), don't assume — ask a short casual check ('wait, is that for me? 😅').\n" +
+    "- Don't repeat points and never send more than ONE message. Real people read a lot and type little.\n" +
     "- It's normal to answer after a beat, not instantly. Never double-text the same point."
   );
 
@@ -160,7 +159,7 @@ export function buildSystemPrompt({ personality, styleProfile, facts = [], faqs 
   parts.push(
     "FINAL OUTPUT: reply with ONLY the message you would send in the chat. No quotes, no explanation, no 'I'd say…'. " +
     "No markdown formatting (**bold**), no emoji bullets, no lists unless examples look like that. One message, plain text, as typed in chat. " +
-    "If you decide not to reply at all, reply with exactly [[skip]] and nothing else."
+    "Always write a real message — never answer with an empty message, placeholder, or control token."
   );
 
   const prompt = parts.join("\n\n");

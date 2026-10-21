@@ -26,6 +26,10 @@ const state = {
 
 const REPLY_DUP_SIMILARITY = 0.82;
 export const MAX_CONCURRENT = 2;
+// if the model throws 4 times in a row the breaker opens, but it must heal itself —
+// otherwise one bad patch of API errors mutes the bot forever (looked like "not replying at all")
+const BREAKER_COOLDOWN_MS = 60_000;
+export const BREAKER_AUTO_RESET_MS = BREAKER_COOLDOWN_MS;
 
 // casual one-liners (heyy, yo, lol…) — worth engaging even though they're tiny
 const CASUAL_CHAT_RE = /^(h+ey+y*|hi+|heya+|hello+|yo+|sup|wassup|whats up|what'?s up|wyd|hola|gm+|gn+|oi+|lol|lmao|bruh|bro|broo|haha+|hehe+|rip|oof)$/i;
@@ -50,7 +54,16 @@ export function decide({ message, channelCfg, replyCfg, state: st, random = Math
   const now = Date.now();
 
   if (replyCfg.stopped) return deny("stopped", "Emergency stop active");
-  if (st.breakerOpen) return deny("breaker", "Circuit breaker open after repeated failures");
+  if (st.breakerOpen) {
+    const age = now - (st.breakerTs || 0);
+    if (age >= BREAKER_COOLDOWN_MS) {
+      // half-open: let the next message try again instead of staying mute forever
+      st.breakerOpen = false;
+      st.consecutiveErrors = 0;
+    } else {
+      return deny("breaker", `Circuit breaker open — auto-retry in ${Math.ceil((BREAKER_COOLDOWN_MS - age) / 1000)}s`);
+    }
+  }
   if (!channelCfg || !channelCfg.enabled) return deny("channel_off", "Channel not configured or disabled");
   if (message.self) return deny("self", "Own message");
 

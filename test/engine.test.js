@@ -15,6 +15,8 @@ function freshState() {
   st.dailyCount = 0;
   st.recentReplies.clear();
   st.breakerOpen = false;
+  st.breakerTs = 0;
+  st.consecutiveErrors = 0;
   return st;
 }
 
@@ -74,13 +76,23 @@ test("emergency stop blocks everything", () => {
   assert.equal(d.code, "stopped");
 });
 
-test("circuit breaker blocks everything", () => {
+test("circuit breaker blocks everything while hot", () => {
   const st = freshState();
   st.breakerOpen = true;
+  st.breakerTs = Date.now();
   const d = decide({ message: baseMsg({ mentionedBot: true }), channelCfg: baseChannel(), replyCfg: cfg(), state: st });
   assert.equal(d.allow, false);
   assert.equal(d.code, "breaker");
   st.breakerOpen = false;
+});
+
+test("circuit breaker heals itself after the cooldown", () => {
+  const st = freshState();
+  st.breakerOpen = true;
+  st.breakerTs = Date.now() - 120_000;   // older than the auto-reset window
+  const d = decide({ message: baseMsg({ mentionedBot: true }), channelCfg: baseChannel(), replyCfg: cfg(), state: st });
+  assert.equal(d.allow, true);
+  assert.equal(st.breakerOpen, false);
 });
 
 test("disabled channel is skipped", () => {
