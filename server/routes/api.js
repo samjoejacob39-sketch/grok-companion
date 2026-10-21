@@ -509,8 +509,8 @@ router.put("/channels/:id", h((req, res) => {
   }
   if (b.enabled !== undefined) entry.enabled = !!b.enabled;
   if (b.approvalMode !== undefined) entry.approvalMode = !!b.approvalMode;
-  if (b.cooldownSeconds !== undefined) entry.cooldownSeconds = b.cooldownSeconds === null ? null : Math.round(clampN(b.cooldownSeconds, 10, 86400));
-  if (b.maxPerHour !== undefined) entry.maxPerHour = b.maxPerHour === null ? null : Math.round(clampN(b.maxPerHour, 1, 200));
+  if (b.cooldownSeconds !== undefined) entry.cooldownSeconds = b.cooldownSeconds === null ? null : Math.round(clampN(b.cooldownSeconds, 0, 86400));
+  if (b.maxPerHour !== undefined) entry.maxPerHour = b.maxPerHour === null ? null : Math.round(clampN(b.maxPerHour, 0, 200));
   if (b.replyChance !== undefined) entry.replyChance = b.replyChance === null ? null : clampN(b.replyChance, 0, 1);
   if (b.systemHint !== undefined) entry.systemHint = String(b.systemHint).slice(0, 1000);
   updateConfig({ channels: next }, { immediate: true });
@@ -530,11 +530,11 @@ router.put("/reply", h((req, res) => {
   const b = req.body || {};
   const cur = getConfig().reply;
   const patch = { ...cur };
-  if (b.cooldownSeconds !== undefined) patch.cooldownSeconds = Math.round(clampN(b.cooldownSeconds, 15, 86400));
-  if (b.globalCooldownSeconds !== undefined) patch.globalCooldownSeconds = Math.round(clampN(b.globalCooldownSeconds, 5, 3600));
-  if (b.maxPerChannelHour !== undefined) patch.maxPerChannelHour = Math.round(clampN(b.maxPerChannelHour, 1, 200));
-  if (b.maxDailyReplies !== undefined) patch.maxDailyReplies = Math.round(clampN(b.maxDailyReplies, 1, 2000));
-  if (b.duplicateWindowHours !== undefined) patch.duplicateWindowHours = Math.round(clampN(b.duplicateWindowHours, 1, 336));
+  if (b.cooldownSeconds !== undefined) patch.cooldownSeconds = Math.round(clampN(b.cooldownSeconds, 0, 86400));
+  if (b.globalCooldownSeconds !== undefined) patch.globalCooldownSeconds = Math.round(clampN(b.globalCooldownSeconds, 0, 3600));
+  if (b.maxPerChannelHour !== undefined) patch.maxPerChannelHour = Math.round(clampN(b.maxPerChannelHour, 0, 200));
+  if (b.maxDailyReplies !== undefined) patch.maxDailyReplies = Math.round(clampN(b.maxDailyReplies, 0, 2000));
+  if (b.duplicateWindowHours !== undefined) patch.duplicateWindowHours = Math.round(clampN(b.duplicateWindowHours, 0, 336));
   if (b.selectiveProbability !== undefined) patch.selectiveProbability = clampN(b.selectiveProbability, 0, 1);
   if (typeof b.respondToCasual === "boolean") patch.respondToCasual = b.respondToCasual;
   if (b.minMessageChars !== undefined) patch.minMessageChars = Math.round(clampN(b.minMessageChars, 1, 50));

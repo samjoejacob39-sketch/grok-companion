@@ -98,13 +98,15 @@ export function decide({ message, channelCfg, replyCfg, state: st, random = Math
   const minLen = numC(replyCfg.minMessageChars, 2);
   if (!casual && normalize(lowText).length < minLen) return deny("too_short", "Message too short to reply to");
 
-  // per-channel hourly cap
+  // per-channel hourly cap (0 or less = unlimited)
   const hourKey = `${channelCfg.id}:${bucketHour(now)}`;
-  if ((st.hourly?.get(hourKey) || 0) >= (channelCfg.maxPerHour ?? replyCfg.maxPerChannelHour ?? 12)) {
+  const maxHour = channelCfg.maxPerHour ?? replyCfg.maxPerChannelHour ?? 12;
+  if (maxHour > 0 && (st.hourly?.get(hourKey) || 0) >= maxHour) {
     return deny("rate_hour", "Channel hourly cap reached");
   }
-  // global daily cap
-  if (st.dailyCount >= (replyCfg.maxDailyReplies ?? 200)) return deny("rate_daily", "Daily reply cap reached");
+  // global daily cap (0 or less = unlimited)
+  const maxDay = replyCfg.maxDailyReplies ?? 200;
+  if (maxDay > 0 && st.dailyCount >= maxDay) return deny("rate_daily", "Daily reply cap reached");
 
   // channel cooldown
   const cdSec = numC(channelCfg.cooldownSeconds, numC(replyCfg.cooldownSeconds, 180));

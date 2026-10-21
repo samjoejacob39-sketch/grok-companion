@@ -265,11 +265,11 @@ export async function renderChannels(host) {
   const channels = data.channels || [];
 
   /* global rules card */
-  const cd = numberField("Per-channel cooldown (s)", reply.cooldownSeconds ?? 180);
-  const gcd = numberField("Global cooldown (s)", reply.globalCooldownSeconds ?? 30);
-  const mph = numberField("Max replies / channel / hour", reply.maxPerChannelHour ?? 12);
-  const day = numberField("Max replies / day (all channels)", reply.maxDailyReplies ?? 200);
-  const dupWin = numberField("Duplicate window (h)", reply.duplicateWindowHours ?? 36);
+  const cd = numberField("Per-channel cooldown (s, 0 = off)", reply.cooldownSeconds ?? 180);
+  const gcd = numberField("Global cooldown (s, 0 = off)", reply.globalCooldownSeconds ?? 30);
+  const mph = numberField("Max replies / channel / hour (0 = unlimited)", reply.maxPerChannelHour ?? 12);
+  const day = numberField("Max replies / day, all channels (0 = unlimited)", reply.maxDailyReplies ?? 200);
+  const dupWin = numberField("Duplicate window (h, 0 = off)", reply.duplicateWindowHours ?? 36);
   const chance = slider("Selective mode reply chance (%)", 0, 100, 5, Math.round((reply.selectiveProbability ?? 0.25) * 100));
   const casual = toggleField("React to casual one-liners (heyy · yo · lol · gm…)", reply.respondToCasual);
   const minChars = numberField("Minimum message length to engage (chars)", reply.minMessageChars ?? 2, 1, 1);
