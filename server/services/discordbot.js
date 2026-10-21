@@ -342,7 +342,9 @@ export async function processMessage(msg) {
       authorName: msg.author?.username || "",
       triggerContent: trimmed,
       mentionedBot,
+      refToBot,
       isQuestion: isQ,
+      casual: !!decision.casual,
     },
     triggerNorm: normalizeLite(trimmed),
     transcriptText,
@@ -387,7 +389,19 @@ async function runJob({ kind, channelId, channelName, messageCtx, triggerNorm, t
   const typing = startTypingLoop(channelId);
 
   try {
-    const draftRes = await generateDraft({ transcriptText, triggerText: messageCtx.triggerContent, memoryFacts, faqEntries });
+    let draftRes = await generateDraft({ transcriptText, triggerText: messageCtx.triggerContent, memoryFacts, faqEntries });
+    // if the model wants to stay quiet on a message aimed straight at it, make it answer
+    const directed = !!(messageCtx.mentionedBot || messageCtx.refToBot || messageCtx.isQuestion || messageCtx.casual);
+    if (directed && /^\s*\[\[\s*skip\s*\]\]/i.test(String(draftRes.text || ""))) {
+      log.info(`[engine] model tried to skip a directed message in #${channelName} — forcing a reply`);
+      draftRes = await generateDraft({
+        transcriptText,
+        triggerText: messageCtx.triggerContent,
+        memoryFacts,
+        faqEntries,
+        warning: "This message is aimed directly at you (they pinged you, replied to you, asked you something, or greeted the chat). You MUST write a short natural reply. Do NOT output [[skip]].",
+      });
+    }
     if (!draftRes.text) {
       recordFailure(new Error("AI returned empty draft"));
       return;
