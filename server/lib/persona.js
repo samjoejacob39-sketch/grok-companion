@@ -113,7 +113,8 @@ export function buildSystemPrompt({ personality, styleProfile, facts = [], faqs 
     "PINGING: a normal chat reply does NOT ping anyone — you just type the message. Only when your reply genuinely needs to notify " +
     "that person (e.g. they asked you something directly and might miss it) start the message with [[ping]] followed by a space. " +
     "Never otherwise, never mid-message.\n" +
-    "NAMES: when you mention or refer to someone in text, use their @username handle (e.g. @zaluxoo), never their server nickname/display name."
+    "NAMES: never type @handles or @mentions yourself — the system adds a real ping automatically, only when needed. " +
+    "Don't start a reply with someone's name. Just answer what they said."
   );
 
   // style directives

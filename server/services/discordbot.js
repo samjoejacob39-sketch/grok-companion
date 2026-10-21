@@ -637,6 +637,8 @@ export async function sendAiMessage(channelId, text, kind = "companion", draftId
       out = out.slice(pingMatch[0].length);
       pingId = extra.mentionId && /^\d+$/.test(String(extra.mentionId)) ? String(extra.mentionId) : null;
     }
+    // if the model typed @handles too, that would double the ping — drop the leading cluster
+    out = out.replace(/^(?:@\S+\s+)+/u, "").trim();
     const content = pingId ? `<@${pingId}> ${out}` : out;
     const payload = extra.replyToMessageId
       ? { content, reply: { messageReference: extra.replyToMessageId, failIfNotExists: false } }

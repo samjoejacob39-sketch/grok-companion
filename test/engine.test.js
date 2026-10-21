@@ -178,3 +178,12 @@ test("postProcess lowercases, strips roles/quotes, applies glossary, flags viola
   assert.ok(!/[A-Z]/.test(out.text.replace(/AI/g, "")) || out.text === out.text.toLowerCase());
   replaceConfig(DEFAULTS);
 });
+
+test("postProcess strips model-typed @handles and blocks @everyone/@here", () => {
+  replaceConfig({ personality: { ...DEFAULTS.personality, lowercase: true } });
+  const out = postProcess("@Zαℓυχσσ @zαℓuchσσ heyy fr how u been? @everyone ping");
+  assert.ok(!out.text.startsWith("@"), "leading handles must be stripped");
+  assert.match(out.text, /^heyy fr how u been/);
+  assert.ok(!/everyone|here/i.test(out.text), "mass-ping tokens must never survive");
+  replaceConfig(DEFAULTS);
+});

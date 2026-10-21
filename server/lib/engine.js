@@ -261,6 +261,10 @@ export function postProcess(raw) {
   text = text.replace(/^(?:assistant|user|ai|bot)\s*:\s*/i, "");
   text = text.replace(/^[ \t]*[-*]?\s*(?:the )?message[ “':-]*\s*/i, ""); // guard against "The message should be..."
   text = text.replace(/^["'“”]+|["'“”]+$/g, "").trim();
+  // safety: the AI must never mass-ping; and it must not type @handles itself
+  // (the system owns mentions — model-typed @names caused double pings)
+  text = text.replace(/@everyone|@here/gi, " ").replace(/\s{2,}/g, " ").trim();
+  text = text.replace(/^(?:@\S+\s+)+/u, "").trim();   // strip leading @name cluster
   text = text.replace(/\n{3,}/g, "\n\n");
   text = text.split("\n").slice(0, 4).join("\n"); // keep replies tight
   if (cfg.personality.lowercase) text = text.toLowerCase();
