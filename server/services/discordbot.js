@@ -230,13 +230,21 @@ export async function processMessage(msg) {
     learnQuestion(msg.content, msg.author?.username);
   }
 
-  // channel must be configured
-  const channelCfg = (cfg.channels || []).find((ch) => ch.id === msg.channelId);
-  if (!channelCfg) return;
+  // blocked users are ignored everywhere
   if ((cfg.discord.permissions.blockedUsers || []).includes(msg.author?.id)) return;
 
-  const trimmed = (msg.cleanContent || msg.content || "").trim();
+  const rawContent = String(msg.content || "");           // RAW — mention tags intact (dm relay needs these)
+  const trimmed = (msg.cleanContent || rawContent).trim();
   const isQ = trimmed.endsWith("?") || /^(what|why|how|who|where|when|can|could|should|does|is|are|will|anyone)\b/i.test(trimmed);
+
+  // explicit command: "dm @user <something>" (with or without pinging the bot) → personal DM relay
+  // IMPORTANT: parse the RAW content — cleanContent strips <@id> tags the parser needs.
+  let dmCmdText = rawContent.trim();
+  if (botUser) {
+    dmCmdText = dmCmdText.replaceAll(`<@${botUser.id}>`, " ").replaceAll(`<@!${botUser.id}>`, " ").trim();
+  }
+  const looksLikeDmCmd = /^dms?\b/i.test(dmCmdText) || /^broadcast\b/i.test(dmCmdText);
+  const dmDirect = looksLikeDmCmd && (/<@!?\d+>/.test(dmCmdText) || /@everyone\b/i.test(dmCmdText) || /^dms?\s+@\S/i.test(dmCmdText));
 
   // ── admin announcement: an @everyone ping in chat → private DM to every member ──
   if (msg.mentions?.everyone && msg.guild && !cfg.reply.stopped && cfg.discord.dmRelay !== false) {
@@ -260,11 +268,8 @@ export async function processMessage(msg) {
     }
   }
 
-  // explicit command: "dm @user <something>" (with or without pinging the bot) → personal DM relay
-  const looksLikeDmCmd = /^dm\b/i.test(trimmed) || /^broadcast\b/i.test(trimmed);
-  const dmDirect = looksLikeDmCmd && (/<@!?\d+>/.test(trimmed) || /@everyone\b/i.test(trimmed) || /^dm\s+@\w/i.test(trimmed));
   if ((mentionedBot || dmDirect) && !cfg.reply.stopped && cfg.discord.dmRelay !== false) {
-    const dmReq = parseDmRequest({ content: trimmed, botId: botUser?.id });
+    const dmReq = parseDmRequest({ content: dmCmdText, botId: botUser?.id });
     if (dmReq) {
       handleDmRequest(msg, dmReq).catch((err) => log.error("[dm] relay failed:", err?.message || err));
       return;   // don't ALSO fire the normal channel reply
@@ -274,6 +279,10 @@ export async function processMessage(msg) {
       return;
     }
   }
+
+  // channel must be configured for normal AI conversation
+  const channelCfg = (cfg.channels || []).find((ch) => ch.id === msg.channelId);
+  if (!channelCfg) return;
 
   const decision = decide({
     message: {
@@ -494,7 +503,7 @@ async function generateDmDraft({ requesterName, targetName, instruction }) {
     triggerText: instruction,
     warning: "",
   });
-  const sys = `${prompt}\n\nMODE: PRIVATE DM DELIVERY. Write ONE direct message to ${targetName} on behalf of the community. A member named ${requesterName} asked you to do this: "${instruction}". If it's a joke → make it a short actually-funny one. If it's info → answer briefly and accurately. If it's a hello → greet warmly. ${cfg.reply.stopped ? "" : ""}Keep it 1–2 sentences, casual and lowercase: style matches your personality. No quotes, no role prefixes, no "here's your" meta-talk.`;
+  const sys = `${prompt}\n\nMODE: PRIVATE DM DELIVERY. Write ONE direct message to ${targetName} on behalf of the community. A member named ${requesterName} asked you to do this: "${instruction}". If it's a joke → make it a short actually-funny one. If it's info → answer briefly and accurately. If it's a hello → greet warmly. Keep it 1–2 sentences, casual and lowercase: style matches your personality. No quotes, no role prefixes, no "here's your" meta-talk. ALWAYS write the DM — never output [[skip]] or [[ping]].`;
   const messages = [{ role: "system", content: sys }, { role: "user", content: "Write the DM text only." }];
   let res = await chatComplete({ messages });
   let out = postProcess(res.content);
@@ -502,14 +511,19 @@ async function generateDmDraft({ requesterName, targetName, instruction }) {
     res = await chatComplete({ messages, maxTokens: Math.max((cfg.xai.maxOutputTokens || 800) * 2, 1000) });
     out = postProcess(res.content);
   }
-  if (!String(out.text || "").trim()) throw new Error("model produced nothing for the DM");
-  return out.text.slice(0, 500);
+  // never leak control tokens into the recipient's DM
+  let dmText = String(out.text || "").replace(/^\s*\[\[\s*(?:ping|skip)\s*\]\]\s*/i, "").trim();
+  if (!dmText) throw new Error("model produced nothing for the DM");
+  return dmText.slice(0, 500);
 }
 
 export async function handleDmRequest(msg, req) {
   const requesterId = msg.author?.id;
   const allowed = dmRelayAllowed(requesterId);
-  if (!allowed.ok) return;   // silent throttle — no public scolding
+  if (!allowed.ok) {
+    msg.channel.send(`⏳ ${allowed.why} — give it a bit`).catch(() => {});
+    return;
+  }
 
   // ── broadcast: "dm @everyone <text>" or "broadcast <text>" — ADMIN ONLY ──
   if (req.broadcast) {
