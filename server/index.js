@@ -22,7 +22,7 @@ import { audit } from "./lib/audit.js";
 import apiRouter from "./routes/api.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const PORT = parseInt(process.env.PORT || "3000", 10);
+const PORT = parseInt(process.env.PORT || process.env.SERVER_PORT || "3000", 10);
 const HOST = process.env.HOST || "0.0.0.0";
 
 function seedFromEnv() {
@@ -113,6 +113,14 @@ async function main() {
   const server = app.listen(PORT, HOST, () => {
     log.info(`[boot] dashboard + API listening on http://${HOST}:${PORT}`);
     audit("server.start", `server listening on ${HOST}:${PORT}`);
+  });
+  // If the port is taken (double start / watchdog race), die fast so only ONE
+  // instance ever host a live Discord gateway — otherwise replies would double.
+  server.on("error", (err) => {
+    if (err?.code === "EADDRINUSE") {
+      log.error(`[boot] port ${PORT} already in use — another instance is already hosting; exiting`);
+      process.exit(1);
+    }
   });
 
   // auto-start bot so replies run 24/7, even with the dashboard closed

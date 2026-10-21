@@ -172,8 +172,17 @@ function wireClient(c) {
 
 // ── message handler ──────────────────────────────────────────────
 
+const seenMessages = new Map();   // id -> ts — hard guard against duplicate processing
+
 function handleMessage(msg) {
   try {
+    if (!msg?.id) return;
+    if (seenMessages.has(msg.id)) return;
+    seenMessages.set(msg.id, Date.now());
+    if (seenMessages.size > 500) {
+      const cutoff = Date.now() - 10 * 60 * 1000;
+      for (const [id, ts] of seenMessages) if (ts < cutoff) seenMessages.delete(id);
+    }
     processMessage(msg).catch((err) => log.error("[discord] pipeline failed:", err?.message || err));
   } catch (err) {
     log.error("[discord] message handler threw:", err?.message || err);
@@ -229,12 +238,18 @@ export async function processMessage(msg) {
   const trimmed = (msg.cleanContent || msg.content || "").trim();
   const isQ = trimmed.endsWith("?") || /^(what|why|how|who|where|when|can|could|should|does|is|are|will|anyone)\b/i.test(trimmed);
 
-  // explicit command: "@bot dm @user <something>" / "@bot broadcast <something>" → DM relay (bypasses the reply roll)
-  if (mentionedBot && !cfg.reply.stopped && cfg.discord.dmRelay !== false) {
+  // explicit command: "dm @user <something>" (with or without pinging the bot) → personal DM relay
+  const looksLikeDmCmd = /^dm\b/i.test(trimmed) || /^broadcast\b/i.test(trimmed);
+  const dmDirect = looksLikeDmCmd && (/<@!?\d+>/.test(trimmed) || /@everyone\b/i.test(trimmed) || /^dm\s+@\w/i.test(trimmed));
+  if ((mentionedBot || dmDirect) && !cfg.reply.stopped && cfg.discord.dmRelay !== false) {
     const dmReq = parseDmRequest({ content: trimmed, botId: botUser?.id });
     if (dmReq) {
       handleDmRequest(msg, dmReq).catch((err) => log.error("[dm] relay failed:", err?.message || err));
       return;   // don't ALSO fire the normal channel reply
+    }
+    if (mentionedBot && looksLikeDmCmd) {
+      msg.channel.send("usage: `@me dm @user <message>` → i'll DM that person privately. for everyone: `@me dm @everyone <message>` (admins only)").catch(() => {});
+      return;
     }
   }
 
@@ -350,6 +365,12 @@ async function runJob({ kind, channelId, channelName, messageCtx, triggerNorm, t
       audit("reply.violation", "Draft discarded — hit do-not-say list", { channel: channelName });
       return;
     }
+    // the model decides when silence is the human thing to do
+    if (/^\s*\[\[\s*skip\s*\]\]/i.test(String(draftRes.text))) {
+      log.info(`[engine] quiet #${channelName}: ai chose not to reply`);
+      audit("reply.skip", "Model chose not to reply", { channel: channelName });
+      return;
+    }
 
     // approval mode (global or per-channel)
     const approvalMode = cfg.generatedReply.mode === "approval" || channelApproval(channelId);
@@ -366,6 +387,10 @@ async function runJob({ kind, channelId, channelName, messageCtx, triggerNorm, t
       });
       return;
     }
+
+    // humans take a beat to read + type — no instant wall-of-reply feel
+    const humanDelay = 800 + Math.floor(Math.random() * 2800);
+    await new Promise((r) => setTimeout(r, humanDelay));
 
     await sendAiMessage(channelId, draftRes.text, "ai-auto", null, {
       latency: Date.now() - started,
@@ -427,8 +452,11 @@ async function resolveDmTarget(msg, req) {
     const members = await msg.guild?.members.fetch({ query: req.targetName, limit: 8 }).catch(() => null);
     if (!members) return null;
     const list = [...members.values()];
-    const hit = list.find((m) => m.user?.username?.toLowerCase() === name || m.displayName?.toLowerCase() === name);
-    return (hit || list[0])?.user || null;
+    // prefer the @username handle — only fall back to display name/nickname
+    const byUsername = list.find((m) => m.user?.username?.toLowerCase() === name);
+    if (byUsername) return byUsername.user;
+    const byDisplay = list.find((m) => m.displayName?.toLowerCase() === name);
+    return (byDisplay || list[0])?.user || null;
   }
   return null;
 }
@@ -491,6 +519,7 @@ export async function handleDmRequest(msg, req) {
       audit("dm.closed", `DMs to ${target.tag} are closed`, { requester: requesterId });
       return;
     }
+    msg.channel.send(`✅ dm sent to @${target.username || target.tag} privately`).catch(() => {});
     sendLog.push({
       ts: Date.now(), channelId: msg.channelId, channelName: `DM → ${target.username || target.tag}`,
       source: "dm", text: out.slice(0, 300), latencyMs: Date.now() - started, draftId: null,
@@ -578,11 +607,15 @@ export async function sendAiMessage(channelId, text, kind = "companion", draftId
     return { ok: false, err: `Bot has no access to channel ${channelId}` };
   }
   try {
-    const out = applyAiMarker(text, kind);
-    // ping the person being answered + link their message as a reply
-    const content = extra.mentionId && /^\d+$/.test(String(extra.mentionId))
-      ? `<@${extra.mentionId}> ${out}`
-      : out;
+    let out = applyAiMarker(text, kind);
+    // the model prefixes [[ping]] only when a notification is truly needed
+    let pingId = null;
+    const pingMatch = out.match(/^\s*\[\[\s*ping\s*\]\]\s*/i);
+    if (pingMatch) {
+      out = out.slice(pingMatch[0].length);
+      pingId = extra.mentionId && /^\d+$/.test(String(extra.mentionId)) ? String(extra.mentionId) : null;
+    }
+    const content = pingId ? `<@${pingId}> ${out}` : out;
     const payload = extra.replyToMessageId
       ? { content, reply: { messageReference: extra.replyToMessageId, failIfNotExists: false } }
       : content;
