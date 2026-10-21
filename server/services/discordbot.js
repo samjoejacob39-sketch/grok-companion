@@ -238,6 +238,28 @@ export async function processMessage(msg) {
   const trimmed = (msg.cleanContent || msg.content || "").trim();
   const isQ = trimmed.endsWith("?") || /^(what|why|how|who|where|when|can|could|should|does|is|are|will|anyone)\b/i.test(trimmed);
 
+  // ── admin announcement: an @everyone ping in chat → private DM to every member ──
+  if (msg.mentions?.everyone && msg.guild && !cfg.reply.stopped && cfg.discord.dmRelay !== false) {
+    const member = msg.member;
+    const isAdmin = !!(member?.permissions?.has?.("Administrator") || member?.permissions?.has?.("ManageGuild"));
+    if (isAdmin) {
+      const text = String(msg.content || "")
+        .replace(/<@!?(\d+)>/g, (_, id) => {
+          const u = msg.mentions?.users?.get(id);
+          return u ? `@${u.username}` : "";
+        })
+        .replace(/<@&\d+>/g, "")
+        .replace(/@everyone|@here/gi, "")
+        .trim();
+      if (!text) {
+        msg.channel.send("give me the announcement too — like `@everyone maintenance at 8pm`").catch(() => {});
+        return;
+      }
+      broadcastEveryone(msg, { instruction: text, broadcast: true }).catch((err) => log.error("[dm] everyone-broadcast failed:", err?.message || err));
+      return;   // don't ALSO fire a normal AI reply
+    }
+  }
+
   // explicit command: "dm @user <something>" (with or without pinging the bot) → personal DM relay
   const looksLikeDmCmd = /^dm\b/i.test(trimmed) || /^broadcast\b/i.test(trimmed);
   const dmDirect = looksLikeDmCmd && (/<@!?\d+>/.test(trimmed) || /@everyone\b/i.test(trimmed) || /^dm\s+@\w/i.test(trimmed));
