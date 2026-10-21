@@ -536,6 +536,7 @@ router.put("/reply", h((req, res) => {
   if (b.maxDailyReplies !== undefined) patch.maxDailyReplies = Math.round(clampN(b.maxDailyReplies, 0, 2000));
   if (b.duplicateWindowHours !== undefined) patch.duplicateWindowHours = Math.round(clampN(b.duplicateWindowHours, 0, 336));
   if (b.selectiveProbability !== undefined) patch.selectiveProbability = clampN(b.selectiveProbability, 0, 1);
+  if (b.smartChance !== undefined) patch.smartChance = clampN(b.smartChance, 0, 1);
   if (typeof b.respondToCasual === "boolean") patch.respondToCasual = b.respondToCasual;
   if (b.minMessageChars !== undefined) patch.minMessageChars = Math.round(clampN(b.minMessageChars, 1, 50));
   if (Array.isArray(b.blockedKeywords)) patch.blockedKeywords = b.blockedKeywords.map((s) => String(s).slice(0, 80)).filter(Boolean).slice(0, 60);

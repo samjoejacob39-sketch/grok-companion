@@ -271,18 +271,20 @@ export async function renderChannels(host) {
   const day = numberField("Max replies / day, all channels (0 = unlimited)", reply.maxDailyReplies ?? 200);
   const dupWin = numberField("Duplicate window (h, 0 = off)", reply.duplicateWindowHours ?? 36);
   const chance = slider("Selective mode reply chance (%)", 0, 100, 5, Math.round((reply.selectiveProbability ?? 0.25) * 100));
+  const smartChance = slider("Smart mode chance for plain chatter (%)", 0, 100, 5, Math.round((reply.smartChance ?? 0.12) * 100));
   const casual = toggleField("React to casual one-liners (heyy · yo · lol · gm…)", reply.respondToCasual);
   const minChars = numberField("Minimum message length to engage (chars)", reply.minMessageChars ?? 2, 1, 1);
   const kws = tagEditor("Blocked keywords (never engage)", reply.blockedKeywords || [], "e.g. giveaway links");
 
   const globalCard = card("Global reply rules", "applied everywhere, on top of per-channel settings",
-    cd.el, gcd.el, mph.el, day.el, dupWin.el, chance.el, minChars.el, casual.el, kws.el,
+    cd.el, gcd.el, mph.el, day.el, dupWin.el, chance.el, smartChance.el, minChars.el, casual.el, kws.el,
     el("button", { class: "btn primary sm", text: "Save global rules", on: async () => {
       await api.put("/reply", {
         cooldownSeconds: cd.get(), globalCooldownSeconds: gcd.get(),
         maxPerChannelHour: mph.get(), maxDailyReplies: day.get(),
         duplicateWindowHours: dupWin.get(),
         selectiveProbability: chance.get() / 100,
+        smartChance: smartChance.get() / 100,
         minMessageChars: minChars.get(),
         respondToCasual: casual.get(),
         blockedKeywords: kws.get(),
